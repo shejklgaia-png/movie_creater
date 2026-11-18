@@ -508,7 +508,78 @@ func _update_camera() -> void:
     editor_camera.position = orbit_target + direction * orbit_distance
     editor_camera.look_at(orbit_target, Vector3.UP)
 
+func _capture_camera_key(at: float) -> Dictionary:
+    return {
+        "time": snappedf(at, 0.01),
+        "position": [shot_camera.position.x, shot_camera.position.y, shot_camera.position.z],
+        "rotation": [shot_camera.rotation.x, shot_camera.rotation.y, shot_camera.rotation.z],
+        "fov": shot_camera.fov
+    }
+
+func _insert_camera_key() -> void:
+    _set_playing(false)
+    if shot_camera == null:
+        return
+    var key := _capture_camera_key(current_time)
+    var replaced := false
+    for i in range(camera_keys.size()):
+        if absf(float(camera_keys[i].get("time", 0.0)) - current_time) < 0.03:
+            camera_keys[i] = key
+            replaced = true
+            break
+    if not replaced:
+        camera_keys.append(key)
+    camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+    _refresh_timeline()
+    _show_message("カメラ %.2f秒 ◆%s" % [current_time, "更新" if replaced else "追加"])
+
+func _toggle_camera_view() -> void:
+    shot_preview = not shot_preview
+    if shot_preview:
+        shot_camera.make_current()
+        camera_view_button.text = "撮影視点"
+        camera_marker.visible = false
+    else:
+        editor_camera.make_current()
+        camera_view_button.text = "編集視点"
+        camera_marker.visible = true
+
+func _copy_editor_to_shot() -> void:
+    _set_playing(false)
+    shot_camera.transform = editor_camera.transform
+    shot_camera.fov = editor_camera.fov
+    _insert_camera_key()
+
+func _sample_camera() -> void:
+    if camera_keys.is_empty():
+        return
+    var first: Dictionary = camera_keys[0]
+    var a: Dictionary = first
+    var b: Dictionary = camera_keys[camera_keys.size() - 1]
+    if current_time <= float(a.get("time", 0.0)):
+        b = a
+    elif current_time >= float(b.get("time", 0.0)):
+        a = b
+    else:
+        for i in range(camera_keys.size() - 1):
+            var left: Dictionary = camera_keys[i]
+            var right: Dictionary = camera_keys[i + 1]
+            if current_time >= float(left["time"]) and current_time <= float(right["time"]):
+                a = left
+                b = right
+                break
+    var t0 := float(a.get("time", 0.0))
+    var t1 := float(b.get("time", t0))
+    var mix_t := 0.0 if absf(t1 - t0) < 0.00001 else clampf((current_time - t0) / (t1 - t0), 0.0, 1.0)
+    shot_camera.position = _array_to_vec(a.get("position", [])).lerp(_array_to_vec(b.get("position", [])), mix_t)
+    var qa := Quaternion(Basis.from_euler(_array_to_vec(a.get("rotation", [])), EULER_ORDER_YXZ))
+    var qb := Quaternion(Basis.from_euler(_array_to_vec(b.get("rotation", [])), EULER_ORDER_YXZ))
+    shot_camera.quaternion = qa.slerp(qb, mix_t)
+    shot_camera.fov = lerpf(float(a.get("fov", 54.0)), float(b.get("fov", 54.0)), mix_t)
+
 func _on_preview_input(event: InputEvent) -> void:
+    if shot_preview:
+        return
     if picker_overlay != null and picker_overlay.visible:
         return
     if event is InputEventScreenTouch:
@@ -675,6 +746,14 @@ func _hit_object_id(local: Vector2) -> String:
     var ray_dir := editor_camera.project_ray_normal(screen_pos)
     var closest_id := ""
     var closest_distance := INF
+    if camera_marker != null and camera_marker.visible:
+        var local_inv := camera_marker.global_transform.affine_inverse()
+        var ray_start: Vector3 = local_inv * ray_origin
+        var ray_axis: Vector3 = local_inv.basis * ray_dir
+        var camera_hit: Variant = camera_marker.get_aabb().intersects_ray(ray_start, ray_axis)
+        if camera_hit is Vector3:
+            closest_id = "__camera__"
+            closest_distance = ray_origin.distance_to(camera_marker.global_transform * (camera_hit as Vector3))
     for id_value in objects_by_id.keys():
         var id := str(id_value)
         var root_node: Node3D = objects_by_id[id]
@@ -787,10 +866,14 @@ func _add_selection_frame(node: Node3D, kind: String) -> void:
     node.add_child(frame)
 
 func _set_selection(id: String) -> void:
-    if not objects_by_id.has(id):
+    if id == "__camera__":
+        selected_id = id
+        selection.text = "撮影カメラ ▾"
+    elif objects_by_id.has(id):
+        selected_id = id
+        selection.text = "%s ▾" % _model_title(id)
+    else:
         return
-    selected_id = id
-    selection.text = "%s ▾" % _model_title(id)
     for object_id in objects_by_id.keys():
         var object_node: Node3D = objects_by_id[object_id]
         var frame: Node3D = object_node.get_node_or_null("SelectionFrame")
@@ -798,12 +881,14 @@ func _set_selection(id: String) -> void:
             # A huge bounding wireframe obstructed imported character models.
             frame.visible = str(object_id) == selected_id and str(object_node.get_meta("kind", "")) != "bbmodel"
     _refresh_motion_button()
-    _show_message("選択中: %s" % _model_title(id))
+    _show_message("選択中: %s" % ("撮影カメラ" if id == "__camera__" else _model_title(id)))
 
 func _refresh_selector() -> void:
     if selection == null:
         return
-    if objects_by_id.has(selected_id):
+    if selected_id == "__camera__":
+        selection.text = "撮影カメラ ▾"
+    elif objects_by_id.has(selected_id):
         selection.text = "%s ▾" % _model_title(selected_id)
     elif not objects_by_id.is_empty():
         _set_selection(str(objects_by_id.keys()[0]))
@@ -905,11 +990,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
 
 func _nudge(direction: float) -> void:
-    if not objects_by_id.has(selected_id):
+    if selected_id != "__camera__" and not objects_by_id.has(selected_id):
         _show_message("編集するモデルを選択してください")
         return
     _set_playing(false)
-    var node: Node3D = objects_by_id[selected_id]
+    var node: Node3D = shot_camera if selected_id == "__camera__" else objects_by_id[selected_id]
     # '+'/'-' is a precise fallback for touch gestures.
     var axis: int = 0 if mode_index == 0 and axis_index == 0 else (1 if axis_index == 0 else axis_index - 1)
     if mode_index == 0:
@@ -930,6 +1015,9 @@ func _capture_key(node: Node3D, at: float) -> Dictionary:
     }
 
 func _insert_key() -> void:
+    if selected_id == "__camera__":
+        _insert_camera_key()
+        return
     if not objects_by_id.has(selected_id):
         _show_message("モデルを選択してください")
         return
@@ -951,6 +1039,16 @@ func _insert_key() -> void:
     _show_message("%.2f秒にキーフレームを%s" % [current_time, "更新" if replaced else "追加"])
 
 func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) -> void:
+    if id == "__camera__":
+        if index < 0 or index >= camera_keys.size():
+            return
+        _set_playing(false)
+        camera_keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
+        if finished:
+            camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        _refresh_timeline()
+        _seek(new_time)
+        return
     if not tracks.has(id):
         return
     var keys: Array = tracks[id]
@@ -1006,6 +1104,7 @@ func _sample_all() -> void:
             lerp_angle(deg_to_rad(start_rot.y), deg_to_rad(end_rot.y), weight),
             lerp_angle(deg_to_rad(start_rot.z), deg_to_rad(end_rot.z), weight))
     _sample_bb_animations()
+    _sample_camera()
 
 func _array_to_vec(data: Variant) -> Vector3:
     if data is Array and data.size() >= 3:
@@ -1016,6 +1115,10 @@ func _refresh_timeline() -> void:
     if timeline == null:
         return
     var rows: Array[Dictionary] = []
+    var camera_times: Array = []
+    for key in camera_keys:
+        camera_times.append(float(key.get("time", 0.0)))
+    rows.append({"id": "__camera__", "label": "🎥カメラ", "times": camera_times})
     for id_value in objects_by_id.keys():
         var id := str(id_value)
         var node: Node3D = objects_by_id[id]
@@ -1023,6 +1126,21 @@ func _refresh_timeline() -> void:
         for key in tracks.get(id, []):
             times.append(float(key.get("time", 0.0)))
         rows.append({"id": id, "label": _model_title(id), "times": times})
+        if bb_assets.has(id):
+            var bars: Array = []
+            var asset: Dictionary = bb_assets[id]
+            var animations: Array = asset.get("clips", [])
+            for bar in clip_tracks.get(id, []):
+                var which := int(bar.get("animation_index", -1))
+                if which < 0 or which >= animations.size():
+                    continue
+                bars.append({
+                    "uid": str(bar.get("uid", "")),
+                    "start": float(bar.get("start", 0.0)),
+                    "end": ClipEngine.end_time(bar),
+                    "label": _short_text(str(animations[which].get("name", "Motion")), 12)
+                })
+            rows.append({"id": id, "kind": "clips", "label": "↳動作", "clips": bars})
     timeline.set_tracks(rows)
 
 func _update_clock() -> void:
