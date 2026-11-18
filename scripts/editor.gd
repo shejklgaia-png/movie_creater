@@ -222,6 +222,7 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     node.set_meta("kind", "bbmodel")
     node.set_meta("tint", "#ffffff")
     scene_root.add_child(node)
+    _add_bbmodel_selection_frame(node)
     objects_by_id[id] = node
     tracks[id] = [_capture_key(node, 0.0)]
     var clips: Array = result.get("animations", [])
@@ -232,12 +233,79 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     }
     _refresh_selector()
     _set_selection(id)
+    _focus_bbmodel(node)
     _refresh_timeline()
     _seek(current_time)
     var notices: Array = result.get("warnings", [])
     var issue_info := (" / 注意: " + str(notices[0])) if not notices.is_empty() else ""
-    _show_message("BB読込: %dキューブ・%dモーション%s" % [int(result["cubes"]), clips.size(), issue_info])
+    _show_message("BB読込成功: %dメッシュ・%dキューブ・%dモーション%s" % [int(result.get("meshes", 0)), int(result["cubes"]), clips.size(), issue_info])
     return true
+
+func _bbmodel_bounds(node: Node3D) -> AABB:
+    # Combined world AABB from every mesh, excluding an existing selection frame.
+    var low := Vector3(1e12, 1e12, 1e12)
+    var high := Vector3(-1e12, -1e12, -1e12)
+    var found := false
+    var stack: Array[Node] = [node]
+    while not stack.is_empty():
+        var item: Node = stack.pop_back()
+        if item is MeshInstance3D and item.name != "SelectionFrame":
+            var model_mesh: MeshInstance3D = item
+            if model_mesh.mesh != null:
+                for i in range(8):
+                    var point := model_mesh.global_transform * model_mesh.get_aabb().get_endpoint(i)
+                    low = low.min(point)
+                    high = high.max(point)
+                    found = true
+        for child in item.get_children():
+            stack.append(child)
+    if not found:
+        return AABB(Vector3.ZERO, Vector3.ZERO)
+    return AABB(low, high - low)
+
+func _add_bbmodel_selection_frame(model: Node3D) -> void:
+    var bounds := _bbmodel_bounds(model)
+    if bounds.size.length_squared() < 0.00001:
+        return
+    var margin := maxf(0.03, bounds.size.length() * 0.02)
+    bounds = bounds.grow(margin)
+    var points: Array[Vector3] = []
+    for i in range(8):
+        points.append(model.to_local(bounds.get_endpoint(i)))
+    var edges := [
+        Vector2i(0, 1), Vector2i(0, 2), Vector2i(0, 4),
+        Vector2i(1, 3), Vector2i(1, 5), Vector2i(2, 3),
+        Vector2i(2, 6), Vector2i(3, 7), Vector2i(4, 5),
+        Vector2i(4, 6), Vector2i(5, 7), Vector2i(6, 7)
+    ]
+    var lines := ImmediateMesh.new()
+    lines.surface_begin(Mesh.PRIMITIVE_LINES)
+    for edge in edges:
+        lines.surface_add_vertex(points[edge.x])
+        lines.surface_add_vertex(points[edge.y])
+    lines.surface_end()
+    var border := MeshInstance3D.new()
+    border.name = "SelectionFrame"
+    border.mesh = lines
+    border.visible = false
+    var material := StandardMaterial3D.new()
+    material.albedo_color = Color("#ffcc70")
+    material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    material.no_depth_test = true
+    border.material_override = material
+    model.add_child(border)
+
+func _focus_bbmodel(model: Node3D) -> void:
+    var bounds := _bbmodel_bounds(model)
+    if bounds.size.length_squared() < 0.00001:
+        return
+    orbit_target = bounds.get_center()
+    var radius := maxf(bounds.size.length() * 0.5, 0.3)
+    var aspect := maxf(preview_box.size.x / maxf(preview_box.size.y, 1.0), 0.3)
+    var half_vertical_fov := deg_to_rad(editor_camera.fov) * 0.5
+    var half_horizontal_fov := atan(tan(half_vertical_fov) * aspect)
+    orbit_distance = clampf(radius / sin(minf(half_vertical_fov, half_horizontal_fov)) * 1.35, 2.5, 80.0)
+    _update_camera()
 
 func _cycle_bb_animation() -> void:
     if not bb_assets.has(selected_id):
