@@ -1374,7 +1374,7 @@ func _set_transform_mode(tool: int) -> void:
     mode_index = tool
     for index in range(transform_buttons.size()):
         var button: Button = transform_buttons[index]
-        var button_mode := [3, 0, 1, 2][index]
+        var button_mode: int = [3, 0, 1, 2][index]
         button.modulate = Color("#8ecaff") if button_mode == mode_index else Color.WHITE
     _update_gizmo()
 
