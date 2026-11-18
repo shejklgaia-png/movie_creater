@@ -230,7 +230,7 @@ func _emit_face(st: SurfaceTool, corners: Array, face: Dictionary, tex_size: Vec
     var turns := posmod(int(round(float(face.get("rotation", 0)) / 90.0)), 4)
     var normal: Vector3 = (corners[1] - corners[0]).cross(corners[2] - corners[0]).normalized()
     for index in [0, 1, 2, 0, 2, 3]:
-        var rotated := (index + turns) % 4
+        var rotated: int = (int(index) + turns) % 4
         st.set_normal(normal)
         st.set_uv(coords[rotated] / tex_size)
         st.add_vertex(corners[index])
