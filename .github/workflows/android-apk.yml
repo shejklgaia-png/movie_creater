@@ -1,0 +1,79 @@
+name: Android APK (debug)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and upload APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Godot 4.7.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable"
+          curl -fL --retry 4 --retry-delay 4 -o /tmp/godot.zip "$BASE/Godot_v4.7.2-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          chmod +x /tmp/godot/Godot_v4.7.2-stable_linux.x86_64
+          /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --version
+
+      - name: Install Android export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable"
+          curl -fL --retry 4 --retry-delay 4 -o /tmp/templates.tpz "$BASE/Godot_v4.7.2-stable_export_templates.tpz"
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          mkdir -p "$TEMPLATE_DIR"
+          unzip -q -j /tmp/templates.tpz 'templates/android_debug.apk' 'templates/android_release.apk' 'templates/version.txt' -d "$TEMPLATE_DIR"
+          ls -lh "$TEMPLATE_DIR"
+
+      - name: Configure Android signing and SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -noprompt -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Import and check GDScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --editor --quit 2>&1 | tee /tmp/import.log
+          if grep -Eq 'SCRIPT ERROR:|Parse Error:' /tmp/import.log; then
+            echo "GDScript errors detected"
+            exit 1
+          fi
+
+      - name: Create Android debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --export-debug Android build/MovieCreator-debug.apk 2>&1 | tee /tmp/export.log
+          test -s build/MovieCreator-debug.apk
+          file build/MovieCreator-debug.apk
+          unzip -t build/MovieCreator-debug.apk | tail -1
+
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MovieCreator-Android-APK
+          path: build/MovieCreator-debug.apk
+          retention-days: 30
+          if-no-files-found: error
