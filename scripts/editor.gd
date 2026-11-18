@@ -519,6 +519,220 @@ func _pick_animation(model_id: String, animation_index: int) -> void:
     _add_animation_clip(model_id, animation_index, current_time)
 
 
+func _build_clip_editor() -> void:
+    clip_overlay = Control.new()
+    clip_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    clip_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    add_child(clip_overlay)
+    var shade := ColorRect.new()
+    shade.color = Color(0.02, 0.04, 0.07, 0.85)
+    shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    clip_overlay.add_child(shade)
+    var outside := Button.new()
+    outside.flat = true
+    outside.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    outside.pressed.connect(_close_clip_editor)
+    clip_overlay.add_child(outside)
+    var sheet := PanelContainer.new()
+    sheet.anchor_left = 0.04
+    sheet.anchor_top = 0.15
+    sheet.anchor_right = 0.96
+    sheet.anchor_bottom = 0.97
+    sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+    clip_overlay.add_child(sheet)
+    var layout := VBoxContainer.new()
+    layout.add_theme_constant_override("separation", 7)
+    sheet.add_child(layout)
+    var title_row := HBoxContainer.new()
+    layout.add_child(title_row)
+    clip_title = Label.new()
+    clip_title.text = "アニメーション詳細"
+    clip_title.clip_text = true
+    clip_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title_row.add_child(clip_title)
+    _make_button(title_row, "閉じる", _close_clip_editor)
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    layout.add_child(scroll)
+    var settings := VBoxContainer.new()
+    settings.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    settings.add_theme_constant_override("separation", 6)
+    scroll.add_child(settings)
+    for field in [
+        {"key":"start", "label":"TL開始（秒）"},
+        {"key":"in", "label":"元動作IN（秒）"},
+        {"key":"out", "label":"元動作OUT（秒）"},
+        {"key":"speed", "label":"再生速度（倍）"}
+    ]:
+        var row := HBoxContainer.new()
+        settings.add_child(row)
+        var caption := Label.new()
+        caption.text = str(field["label"])
+        caption.custom_minimum_size.x = 128
+        row.add_child(caption)
+        var number := SpinBox.new()
+        number.min_value = 0.0 if str(field["key"]) != "speed" else 0.1
+        number.max_value = 120.0 if str(field["key"]) != "speed" else 4.0
+        number.step = 0.05
+        number.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        number.value_changed.connect(_update_clip_field.bind(str(field["key"])))
+        row.add_child(number)
+        clip_fields[str(field["key"])] = number
+    var explanation := Label.new()
+    explanation.text = "有効な関節だけにモーションを適用します"
+    explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    settings.add_child(explanation)
+    var toolbar := HBoxContainer.new()
+    settings.add_child(toolbar)
+    _make_button(toolbar, "全関節ON", func(): _set_all_bones(true))
+    _make_button(toolbar, "全関節OFF", func(): _set_all_bones(false))
+    var caption := Label.new()
+    caption.text = "関節一覧（親を選ぶと子も変更）"
+    settings.add_child(caption)
+    clip_bone_list = VBoxContainer.new()
+    settings.add_child(clip_bone_list)
+    _make_button(layout, "このクリップを削除", _delete_editing_clip)
+    clip_overlay.hide()
+
+func _open_clip_editor(model_id: String, uid: String) -> void:
+    var index := _find_clip_index(model_id, uid)
+    if index < 0 or not bb_assets.has(model_id):
+        return
+    _set_playing(false)
+    editing_clip_model = model_id
+    editing_clip_uid = uid
+    var active: Dictionary = clip_tracks[model_id][index]
+    var asset: Dictionary = bb_assets[model_id]
+    var source_index := int(active.get("animation_index", -1))
+    var animations: Array = asset.get("clips", [])
+    if source_index < 0 or source_index >= animations.size():
+        return
+    var animation: Dictionary = animations[source_index]
+    clip_title.text = _short_text(str(animation.get("name", "Animation")), 25)
+    for field_name in ["start", "in", "out", "speed"]:
+        var control: SpinBox = clip_fields[field_name]
+        control.set_value_no_signal(float(active.get(field_name, 0.0)))
+    var source_duration := _animation_duration(animation)
+    (clip_fields["in"] as SpinBox).max_value = source_duration
+    (clip_fields["out"] as SpinBox).max_value = source_duration
+    for child in clip_bone_list.get_children():
+        clip_bone_list.remove_child(child)
+        child.queue_free()
+    var groups: Dictionary = asset["groups"]
+    for group_id_value in groups.keys():
+        var group_id := str(group_id_value)
+        var state: Dictionary = groups[group_id]
+        var group_node: Node3D = state["node"]
+        var label := CheckBox.new()
+        label.text = _short_text(group_node.name, 24)
+        label.custom_minimum_size.y = 40.0
+        label.set_meta("group_uuid", group_id)
+        label.set_pressed_no_signal(ClipEngine.includes_group(active, group_id))
+        label.toggled.connect(_toggle_clip_bone.bind(model_id, uid, group_id))
+        clip_bone_list.add_child(label)
+    clip_overlay.show()
+
+func _current_edit_clip() -> Dictionary:
+    var index := _find_clip_index(editing_clip_model, editing_clip_uid)
+    if index < 0:
+        return {}
+    return clip_tracks[editing_clip_model][index]
+
+func _save_edit_clip(clip: Dictionary) -> void:
+    var index := _find_clip_index(editing_clip_model, editing_clip_uid)
+    if index < 0:
+        return
+    var rows: Array = clip_tracks[editing_clip_model]
+    rows[index] = clip
+    clip_tracks[editing_clip_model] = rows
+    _refresh_timeline()
+    _seek(current_time)
+
+func _update_clip_field(value: float, field_name: String) -> void:
+    var clip := _current_edit_clip()
+    if clip.is_empty():
+        return
+    clip[field_name] = value
+    var asset: Dictionary = bb_assets[editing_clip_model]
+    var animations: Array = asset["clips"]
+    var index := int(clip.get("animation_index", -1))
+    if index < 0 or index >= animations.size():
+        return
+    clip = ClipEngine.validate(clip, _animation_duration(animations[index]), DURATION)
+    if ClipEngine.clip_length(clip) < DURATION:
+        clip["start"] = minf(float(clip["start"]), DURATION - ClipEngine.clip_length(clip))
+    _save_edit_clip(clip)
+    # Keep numerical UI in sync if a source boundary was clamped.
+    for key in ["start", "in", "out", "speed"]:
+        (clip_fields[key] as SpinBox).set_value_no_signal(float(clip[key]))
+
+func _toggle_clip_bone(enabled: bool, model_id: String, uid: String, group_id: String) -> void:
+    var clip := _current_edit_clip()
+    if clip.is_empty() or model_id != editing_clip_model or uid != editing_clip_uid:
+        return
+    var groups: Dictionary = bb_assets[model_id]["groups"]
+    if not groups.has(group_id):
+        return
+    var selected_parent: Node3D = groups[group_id]["node"]
+    var enabled_list: Array = clip.get("enabled_groups", []).duplicate()
+    for key in groups.keys():
+        var uuid := str(key)
+        var child: Node3D = groups[uuid]["node"]
+        var cursor: Node = child
+        var within := false
+        while cursor != null:
+            if cursor == selected_parent:
+                within = true
+                break
+            cursor = cursor.get_parent()
+        if not within:
+            continue
+        if enabled and not enabled_list.has(uuid):
+            enabled_list.append(uuid)
+        elif not enabled:
+            enabled_list.erase(uuid)
+    clip["enabled_groups"] = enabled_list
+    _save_edit_clip(clip)
+    _sync_bone_checks()
+
+func _sync_bone_checks() -> void:
+    var clip := _current_edit_clip()
+    if clip.is_empty():
+        return
+    for child in clip_bone_list.get_children():
+        if child is CheckBox and child.has_meta("group_uuid"):
+            var uuid := str(child.get_meta("group_uuid"))
+            (child as CheckBox).set_pressed_no_signal(ClipEngine.includes_group(clip, uuid))
+
+func _set_all_bones(enabled: bool) -> void:
+    var clip := _current_edit_clip()
+    if clip.is_empty():
+        return
+    var ids: Array = []
+    if enabled:
+        for key in (bb_assets[editing_clip_model]["groups"] as Dictionary).keys():
+            ids.append(str(key))
+    clip["enabled_groups"] = ids
+    _save_edit_clip(clip)
+    _sync_bone_checks()
+
+func _delete_editing_clip() -> void:
+    var index := _find_clip_index(editing_clip_model, editing_clip_uid)
+    if index >= 0:
+        var rows: Array = clip_tracks[editing_clip_model]
+        rows.remove_at(index)
+        clip_tracks[editing_clip_model] = rows
+        _refresh_timeline()
+        _seek(current_time)
+    _close_clip_editor()
+
+func _close_clip_editor() -> void:
+    if clip_overlay != null:
+        clip_overlay.hide()
+    editing_clip_model = ""
+    editing_clip_uid = ""
+
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
     button.text = title
