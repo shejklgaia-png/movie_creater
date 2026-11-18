@@ -41,13 +41,28 @@ jobs:
 
       - name: Configure Android signing and SDK
         shell: bash
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.MOVIE_CREATOR_DEBUG_KEYSTORE_B64 }}
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.MOVIE_CREATOR_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.android"
-          keytool -genkeypair -noprompt -v -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          if [[ -n "${SIGNING_KEYSTORE_B64:-}" && -n "${SIGNING_KEYSTORE_PASSWORD:-}" ]]; then
+            # User-provided protected keystore is stable across APK updates.
+            printf '%s' "$SIGNING_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+            chmod 600 "$HOME/.android/debug.keystore"
+            keytool -list -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -storepass "$SIGNING_KEYSTORE_PASSWORD" >/dev/null
+            echo "Using configured persistent debug signing key"
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=$SIGNING_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            # Fresh keys are intentionally NOT a substitute for a stable signing
+            # identity. Publish the warning before users install the APK.
+            keytool -genkeypair -noprompt -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+            echo "WARNING: ephemeral debug signature. Export projects before reinstalling!" >&2
+            echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+          fi
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
-          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
