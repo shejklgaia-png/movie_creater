@@ -16,9 +16,13 @@ var clock_label: Label
 var status_label: Label
 var play_button: Button
 var time_slider: HSlider
-var selection: OptionButton
-var axis_option: OptionButton
-var mode_option: OptionButton
+var selection: Button
+var axis_option: Button
+var mode_option: Button
+var picker_overlay: Control
+var picker_list: VBoxContainer
+var mode_index := 0
+var axis_index := 0
 
 var objects_by_id: Dictionary = {}
 var tracks: Dictionary = {}
@@ -122,21 +126,10 @@ func _build_interface() -> void:
 
     var properties := HBoxContainer.new()
     dock.add_child(properties)
-    selection = OptionButton.new()
+    selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
     selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    selection.custom_minimum_size.y = 48
-    properties.add_child(selection)
-    selection.item_selected.connect(_on_selection_changed)
-    mode_option = OptionButton.new()
-    mode_option.add_item("移動")
-    mode_option.add_item("回転")
-    mode_option.custom_minimum_size.y = 48
-    properties.add_child(mode_option)
-    axis_option = OptionButton.new()
-    for axis in ["X", "Y", "Z"]:
-        axis_option.add_item(axis)
-    axis_option.custom_minimum_size.y = 48
-    properties.add_child(axis_option)
+    mode_option = _make_button(properties, "移動 ↻", _cycle_mode)
+    axis_option = _make_button(properties, "X ↻", _cycle_axis)
 
     var nudge_row := HBoxContainer.new()
     dock.add_child(nudge_row)
@@ -153,6 +146,7 @@ func _build_interface() -> void:
     status_label.custom_minimum_size.y = 28
     status_label.add_theme_font_size_override("font_size", 12)
     dock.add_child(status_label)
+    _build_picker()
 
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
@@ -340,28 +334,111 @@ func _set_selection(id: String) -> void:
     if not objects_by_id.has(id):
         return
     selected_id = id
-    for index in range(selection.item_count):
-        if str(selection.get_item_metadata(index)) == id:
-            selection.select(index)
-            break
+    selection.text = "%s ▾" % (objects_by_id[id] as Node3D).name
     _show_message("選択中: %s" % (objects_by_id[id] as Node3D).name)
-
-func _on_selection_changed(index: int) -> void:
-    _set_selection(str(selection.get_item_metadata(index)))
 
 func _refresh_selector() -> void:
     if selection == null:
         return
-    selection.clear()
-    for id_value in objects_by_id.keys():
-        var id := str(id_value)
-        var node: Node3D = objects_by_id[id]
-        selection.add_item(node.name)
-        selection.set_item_metadata(selection.item_count - 1, id)
     if objects_by_id.has(selected_id):
-        _set_selection(selected_id)
-    elif selection.item_count > 0:
-        _set_selection(str(selection.get_item_metadata(0)))
+        selection.text = "%s ▾" % (objects_by_id[selected_id] as Node3D).name
+    elif not objects_by_id.is_empty():
+        _set_selection(str(objects_by_id.keys()[0]))
+    else:
+        selection.text = "モデル選択 ▾"
+
+func _cycle_mode() -> void:
+    mode_index = (mode_index + 1) % 2
+    mode_option.text = ("移動 ↻" if mode_index == 0 else "回転 ↻")
+
+func _cycle_axis() -> void:
+    axis_index = (axis_index + 1) % 3
+    axis_option.text = ["X ↻", "Y ↻", "Z ↻"][axis_index]
+
+func _build_picker() -> void:
+    # A native OptionButton PopupMenu is hard to dismiss on Android.
+    # This in-scene sheet has three explicit exit paths: choose, X, outside.
+    picker_overlay = Control.new()
+    picker_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    picker_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    add_child(picker_overlay)
+
+    var shade := ColorRect.new()
+    shade.color = Color(0.02, 0.04, 0.07, 0.75)
+    shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    picker_overlay.add_child(shade)
+
+    var outside_button := Button.new()
+    outside_button.flat = true
+    outside_button.focus_mode = Control.FOCUS_NONE
+    outside_button.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    outside_button.pressed.connect(_close_picker)
+    picker_overlay.add_child(outside_button)
+
+    var sheet := PanelContainer.new()
+    sheet.anchor_left = 0.0
+    sheet.anchor_top = 0.45
+    sheet.anchor_right = 1.0
+    sheet.anchor_bottom = 1.0
+    sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+    picker_overlay.add_child(sheet)
+
+    var contents := VBoxContainer.new()
+    contents.add_theme_constant_override("separation", 8)
+    sheet.add_child(contents)
+
+    var title_row := HBoxContainer.new()
+    contents.add_child(title_row)
+    var title := Label.new()
+    title.text = "モデルを選択"
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.add_theme_font_size_override("font_size", 20)
+    title_row.add_child(title)
+    _make_button(title_row, "✕ 閉じる", _close_picker)
+
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    contents.add_child(scroll)
+    picker_list = VBoxContainer.new()
+    picker_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    scroll.add_child(picker_list)
+    picker_overlay.hide()
+
+func _toggle_picker() -> void:
+    if picker_overlay.visible:
+        _close_picker()
+        return
+    _refresh_picker_list()
+    picker_overlay.show()
+
+func _refresh_picker_list() -> void:
+    for child in picker_list.get_children():
+        picker_list.remove_child(child)
+        child.queue_free()
+    for id_value in objects_by_id.keys():
+        var item_id := str(id_value)
+        var button := Button.new()
+        button.text = ("✓ " if item_id == selected_id else "　") + (objects_by_id[item_id] as Node3D).name
+        button.custom_minimum_size.y = 56.0
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        button.pressed.connect(_choose_model.bind(item_id))
+        picker_list.add_child(button)
+
+func _choose_model(id: String) -> void:
+    _set_selection(id)
+    _close_picker()
+
+func _close_picker() -> void:
+    if picker_overlay != null:
+        picker_overlay.hide()
+
+func _unhandled_key_input(event: InputEvent) -> void:
+    if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+        if picker_overlay != null and picker_overlay.visible:
+            _close_picker()
+            get_viewport().set_input_as_handled()
 
 func _nudge(direction: float) -> void:
     if not objects_by_id.has(selected_id):
@@ -369,8 +446,8 @@ func _nudge(direction: float) -> void:
         return
     _set_playing(false)
     var node: Node3D = objects_by_id[selected_id]
-    var axis := axis_option.selected
-    if mode_option.selected == 0:
+    var axis := axis_index
+    if mode_index == 0:
         var pos := node.position
         pos[axis] += direction * 0.25
         node.position = pos
