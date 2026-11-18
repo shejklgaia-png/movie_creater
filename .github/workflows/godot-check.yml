@@ -31,3 +31,8 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_free_mesh_bbmodel.gd 2>&1 | tee /tmp/mesh-test.log
           grep -F "FREE MESH TEST PASSED" /tmp/mesh-test.log
+      - name: Blockbench bone rotation order integration test
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_bbmodel_bone_rotation.gd 2>&1 | tee /tmp/bone-rotation-test.log
+          grep -F "BONE ROTATION TEST PASSED" /tmp/bone-rotation-test.log
