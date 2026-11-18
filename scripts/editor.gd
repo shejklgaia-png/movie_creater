@@ -917,10 +917,12 @@ func _toggle_camera_view() -> void:
         shot_camera.make_current()
         camera_view_button.text = "撮影視点"
         camera_marker.visible = false
+        _update_gizmo()
     else:
         editor_camera.make_current()
         camera_view_button.text = "編集視点"
         camera_marker.visible = true
+        _update_gizmo()
 
 func _copy_editor_to_shot() -> void:
     _set_playing(false)
@@ -1626,22 +1628,41 @@ func _unhandled_key_input(event: InputEvent) -> void:
             get_viewport().set_input_as_handled()
 
 func _nudge(direction: float) -> void:
-    if selected_id != "__camera__" and not objects_by_id.has(selected_id):
-        _show_message("編集するモデルを選択してください")
+    var node := _get_selected_target()
+    if node == null:
+        _show_message("編集する要素を選択してください")
         return
     _set_playing(false)
-    var node: Node3D = shot_camera if selected_id == "__camera__" else objects_by_id[selected_id]
-    # '+'/'-' is a precise fallback for touch gestures.
-    var axis: int = 0 if mode_index == 0 and axis_index == 0 else (1 if axis_index == 0 else axis_index - 1)
-    if mode_index == 0:
+    var original_position := node.position
+    var original_rotation := node.rotation_degrees
+    var original_scale := node.scale
+    var previous := _get_part_offset(selected_id, selected_part_path)
+    var axis: int = 1 if axis_index == 0 and mode_index == 1 else maxi(0, axis_index - 1)
+    if mode_index == 2:
+        var value := 1.1 if direction > 0.0 else 1.0 / 1.1
+        if axis_index == 0:
+            node.scale *= Vector3.ONE * value
+        else:
+            var v := node.scale
+            v[axis] *= value
+            node.scale = v
+    elif mode_index == 1:
+        var angles := node.rotation_degrees
+        angles[axis] += direction * 10.0
+        node.rotation_degrees = angles
+    elif mode_index == 0:
         var pos := node.position
         pos[axis] += direction * 0.25
         node.position = pos
     else:
-        var angles := node.rotation_degrees
-        angles[axis] += direction * 10.0
-        node.rotation_degrees = angles
-    _show_message("姿勢を変更しました。◆で現在時刻に登録してください。")
+        return
+    if selected_part_model == selected_id and not selected_part_path.is_empty():
+        _commit_part_edit(node, original_position, original_rotation, original_scale, previous)
+    elif selected_id == "__camera__":
+        _insert_camera_key()
+    else:
+        _insert_key()
+    _update_gizmo()
 
 func _capture_key(node: Node3D, at: float) -> Dictionary:
     return {
