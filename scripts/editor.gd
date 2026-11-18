@@ -6,6 +6,7 @@ const TimelineView = preload("res://scripts/timeline.gd")
 const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
 const ClipEngine = preload("res://scripts/clip_engine.gd")
 const TransformGizmo = preload("res://scripts/transform_gizmo.gd")
+const PoseTrack = preload("res://scripts/pose_track.gd")
 const SAVE_PATH := "user://movie_project.json"
 const DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
@@ -39,6 +40,10 @@ var selection: Button
 var axis_option: Button
 var mode_option: Button
 var motion_button: Button
+var pose_record_button: Button
+var pose_record_mode := false
+# model_id -> (relative NodePath -> timeline pose keys)
+var part_pose_tracks: Dictionary = {}
 var bb_file_dialog: FileDialog
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
@@ -128,6 +133,8 @@ func _build_interface() -> void:
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
+    _make_button(header, "↶", _undo_part_edit).tooltip_text = "部位編集を元に戻す"
+    _make_button(header, "↷", _redo_part_edit).tooltip_text = "部位編集をやり直す"
     _make_button(header, "保存", _save_project)
     _make_button(header, "読込", _load_project)
 
@@ -240,7 +247,10 @@ func _build_interface() -> void:
     motion_button.clip_text = true
     motion_button.custom_minimum_size.x = 0
     motion_button.tooltip_text = "読み込んだモデルのアニメーションを切り替え"
-
+    pose_record_button = _make_button(motion_row, "◆ポーズOFF", _toggle_pose_record)
+    pose_record_button.custom_minimum_size = Vector2(112, 48)
+    pose_record_button.clip_text = true
+    pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
 
     var properties := HBoxContainer.new()
     dock.add_child(properties)
