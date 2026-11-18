@@ -1337,6 +1337,7 @@ func _set_selection(id: String) -> void:
             frame.visible = str(object_id) == selected_id and str(object_node.get_meta("kind", "")) != "bbmodel"
     _refresh_motion_button()
     _update_gizmo()
+    _refresh_timeline()
     _show_message("選択中: %s" % ("撮影カメラ" if id == "__camera__" else _model_title(id)))
 
 func _refresh_selector() -> void:
@@ -1374,6 +1375,7 @@ func _set_part_selection(model_id: String, path: String) -> void:
     selected_part_path = path
     _set_selection(model_id)
     _update_gizmo()
+    _refresh_timeline()
     var target := _get_selected_target()
     if target != null:
         _show_message("要素: %s" % _short_text(target.name, 28))
@@ -1974,6 +1976,9 @@ func _capture_key(node: Node3D, at: float) -> Dictionary:
     }
 
 func _insert_key() -> void:
+    if pose_record_mode and selected_part_model == selected_id and not selected_part_path.is_empty():
+        _insert_selected_part_key()
+        return
     if selected_id == "__camera__":
         _insert_camera_key()
         return
@@ -1998,6 +2003,24 @@ func _insert_key() -> void:
     _show_message("%.2f秒にキーフレームを%s" % [current_time, "更新" if replaced else "追加"])
 
 func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) -> void:
+    if id == "__pose__":
+        if selected_part_model != selected_id or selected_part_path.is_empty():
+            return
+        var keys := _pose_keys(selected_id, selected_part_path).duplicate(true)
+        if index < 0 or index >= keys.size():
+            return
+        _set_playing(false)
+        # Retain the original order until release to avoid changing which key
+        # a finger is currently dragging across other keyframes.
+        keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
+        if finished:
+            keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        var by_model: Dictionary = part_pose_tracks.get(selected_id, {})
+        by_model[selected_part_path] = keys
+        part_pose_tracks[selected_id] = by_model
+        _refresh_timeline()
+        _seek(new_time)
+        return
     if id == "__camera__":
         if index < 0 or index >= camera_keys.size():
             return
@@ -2104,6 +2127,13 @@ func _refresh_timeline() -> void:
                     "label": _short_text(str(animations[which].get("name", "Motion")), 12)
                 })
             rows.append({"id": id, "kind": "clips", "label": "↳動作", "clips": bars})
+    if selected_part_model == selected_id and not selected_part_path.is_empty() and objects_by_id.has(selected_id):
+        var chosen: Node3D = (objects_by_id[selected_id] as Node3D).get_node_or_null(NodePath(selected_part_path))
+        if chosen != null:
+            var times: Array = []
+            for key in _pose_keys(selected_id, selected_part_path):
+                times.append(float(key.get("time", 0.0)))
+            rows.append({"id": "__pose__", "label": "↳%s◆" % _short_text(chosen.name, 6), "times": times})
     timeline.set_tracks(rows)
 
 func _update_clock() -> void:
@@ -2133,10 +2163,11 @@ func _serialize_project() -> Dictionary:
             "keyframes": tracks.get(id, []),
             "animation_clips": clip_tracks.get(id, []),
             "element_offsets": element_offsets.get(id, {}).duplicate(true),
+            "part_pose_tracks": part_pose_tracks.get(id, {}).duplicate(true),
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 3, "duration": DURATION,
+    return {"version": 4, "duration": DURATION,
         "camera_keys": camera_keys.duplicate(true), "objects": records}
 
 func _save_project() -> void:
@@ -2160,7 +2191,7 @@ func _load_project() -> void:
         return
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3] or not (parsed.get("objects") is Array):
+    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4] or not (parsed.get("objects") is Array):
         _show_message("未対応のプロジェクト形式です")
         return
     for node in objects_by_id.values():
@@ -2170,7 +2201,10 @@ func _load_project() -> void:
     bb_assets.clear()
     clip_tracks.clear()
     element_offsets.clear()
+    part_pose_tracks.clear()
     static_element_rest.clear()
+    undo_stack.clear()
+    redo_stack.clear()
     selected_part_model = ""
     selected_part_path = ""
     next_clip_id = 1
@@ -2228,6 +2262,26 @@ func _load_project() -> void:
             }
             _capture_static_element_rest(id)
             element_offsets[id] = (record.get("element_offsets", {}) as Dictionary).duplicate(true)
+            # Reject missing/invalid paths and malformed keys rather than
+            # trusting JSON loaded from an old project.
+            var loaded_pose: Dictionary = {}
+            var original_pose: Variant = record.get("part_pose_tracks", {})
+            if original_pose is Dictionary:
+                for path_value in original_pose.keys():
+                    var part_path := str(path_value)
+                    if model.get_node_or_null(NodePath(part_path)) == null:
+                        continue
+                    var raw_pose: Variant = original_pose[path_value]
+                    if not (raw_pose is Array):
+                        continue
+                    var validated: Array = []
+                    for key_value in raw_pose:
+                        if key_value is Dictionary and key_value.has("time") and key_value.has("position") and key_value.has("rotation") and key_value.has("scale"):
+                            validated.append(key_value.duplicate(true))
+                    validated.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+                    if not validated.is_empty():
+                        loaded_pose[part_path] = validated
+            part_pose_tracks[id] = loaded_pose
             var restored: Array = []
             for clip_value in record.get("animation_clips", []):
                 if not (clip_value is Dictionary):
