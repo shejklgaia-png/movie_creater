@@ -35,9 +35,18 @@ var orbit_target := Vector3(0.0, 0.9, 0.0)
 var orbit_yaw := 0.65
 var orbit_pitch := 0.48
 var orbit_distance := 9.0
+# Android touch: touching a model edits it; touching empty space orbits the camera.
 var touches: Dictionary = {}
-var touch_starts: Dictionary = {}
-var mouse_start := Vector2.ZERO
+var pointer_active := false
+var pointer_touch_index := -1
+var pointer_origin := Vector2.ZERO
+var pointer_last := Vector2.ZERO
+var drag_target_id := ""
+var drag_moved := false
+var drag_position_start := Vector3.ZERO
+var drag_rotation_start := Vector3.ZERO
+var drag_grab_point := Vector3.ZERO
+var mouse_left_held := false
 
 func _ready() -> void:
     _build_interface()
@@ -129,13 +138,13 @@ func _build_interface() -> void:
     selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
     selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     mode_option = _make_button(properties, "移動 ↻", _cycle_mode)
-    axis_option = _make_button(properties, "X ↻", _cycle_axis)
+    axis_option = _make_button(properties, "自由 ↻", _cycle_axis)
 
     var nudge_row := HBoxContainer.new()
     dock.add_child(nudge_row)
     _make_button(nudge_row, "－", func(): _nudge(-1.0))
     var nudge_hint := Label.new()
-    nudge_hint.text = "移動 0.25m / 回転 10°"
+    nudge_hint.text = "モデルを直接ドラッグできます"
     nudge_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     nudge_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     nudge_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -217,39 +226,42 @@ func _update_camera() -> void:
     editor_camera.look_at(orbit_target, Vector3.UP)
 
 func _on_preview_input(event: InputEvent) -> void:
+    if picker_overlay != null and picker_overlay.visible:
+        return
     if event is InputEventScreenTouch:
         if event.pressed:
             touches[event.index] = event.position
-            touch_starts[event.index] = event.position
+            if touches.size() == 1:
+                pointer_touch_index = event.index
+                _begin_pointer(event.position)
+            else:
+                # Moving from single-touch dragging to pinch commits the edited pose.
+                _finish_pointer(pointer_last)
+                pointer_touch_index = -1
         else:
-            var start: Vector2 = touch_starts.get(event.index, event.position)
-            if touches.size() == 1 and start.distance_to(event.position) < 12.0:
-                _pick_object(event.position)
+            if touches.size() == 1 and pointer_touch_index == event.index:
+                _finish_pointer(event.position)
             touches.erase(event.index)
-            touch_starts.erase(event.index)
+            if touches.is_empty():
+                pointer_touch_index = -1
         accept_event()
     elif event is InputEventScreenDrag:
         if touches.has(event.index):
             var old_position: Vector2 = touches[event.index]
             touches[event.index] = event.position
-            if touches.size() == 1:
-                _orbit(event.position - old_position)
+            if touches.size() == 1 and pointer_touch_index == event.index:
+                _move_pointer(event.position)
             elif touches.size() == 2:
-                var indices: Array = touches.keys()
-                var other_index: int = indices[0] if indices[1] == event.index else indices[1]
-                var other_position: Vector2 = touches[other_index]
-                var old_distance := old_position.distance_to(other_position)
-                var new_distance: float = event.position.distance_to(other_position)
-                if old_distance > 1.0 and new_distance > 1.0:
-                    orbit_distance = clampf(orbit_distance * old_distance / new_distance, 2.0, 30.0)
-                    _update_camera()
+                _two_finger_camera(event.index, old_position, event.position)
         accept_event()
     elif event is InputEventMouseButton:
         if event.button_index == MOUSE_BUTTON_LEFT:
             if event.pressed:
-                mouse_start = event.position
-            elif mouse_start.distance_to(event.position) < 8.0:
-                _pick_object(event.position)
+                mouse_left_held = true
+                _begin_pointer(event.position)
+            elif mouse_left_held:
+                _finish_pointer(event.position)
+                mouse_left_held = false
             accept_event()
         elif event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
             orbit_distance = maxf(2.0, orbit_distance * 0.9)
@@ -259,25 +271,126 @@ func _on_preview_input(event: InputEvent) -> void:
             orbit_distance = minf(30.0, orbit_distance * 1.1)
             _update_camera()
             accept_event()
-    elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-        _orbit(event.relative)
+    elif event is InputEventMouseMotion and mouse_left_held:
+        _move_pointer(event.position)
         accept_event()
+
+func _begin_pointer(at: Vector2) -> void:
+    pointer_active = true
+    pointer_origin = at
+    pointer_last = at
+    drag_moved = false
+    drag_target_id = _hit_object_id(at)
+    if not drag_target_id.is_empty():
+        _set_playing(false)
+        _set_selection(drag_target_id)
+        var node: Node3D = objects_by_id[drag_target_id]
+        drag_position_start = node.position
+        drag_rotation_start = node.rotation_degrees
+        drag_grab_point = _world_on_level(at, node.position.y, node.position)
+
+func _move_pointer(at: Vector2) -> void:
+    if not pointer_active:
+        return
+    var motion := at - pointer_last
+    pointer_last = at
+    if drag_target_id.is_empty():
+        _orbit(motion)
+        return
+    if not drag_moved and at.distance_to(pointer_origin) < 9.0:
+        return
+    drag_moved = true
+    _apply_model_drag(at)
+
+func _finish_pointer(at: Vector2) -> void:
+    if not pointer_active:
+        return
+    if drag_moved and not drag_target_id.is_empty():
+        _apply_model_drag(at)
+        # A completed direct manipulation always produces a persistent keyframe.
+        _insert_key()
+        _show_message("指で編集した姿勢を %.2f 秒に記録しました" % current_time)
+    pointer_active = false
+    drag_moved = false
+    drag_target_id = ""
+
+func _apply_model_drag(at: Vector2) -> void:
+    if not objects_by_id.has(drag_target_id):
+        return
+    var node: Node3D = objects_by_id[drag_target_id]
+    if mode_index == 1:
+        # Drag horizontally to rotate. In 'free' mode, rotate about world Y.
+        var axis: int = 1 if axis_index == 0 else axis_index - 1
+        var angle := drag_rotation_start
+        angle[axis] += (at.x - pointer_origin.x) * 0.55
+        node.rotation_degrees = angle
+        return
+
+    var position := drag_position_start
+    if axis_index == 2:
+        # Vertical axis: drag upward to lift, with sensitivity based on camera distance.
+        var height_scale: float = 2.0 * orbit_distance * tan(deg_to_rad(editor_camera.fov) * 0.5) / maxf(preview_box.size.y, 1.0)
+        position.y += (pointer_origin.y - at.y) * height_scale
+    else:
+        # Ground-plane manipulation; preserve the initial finger-to-object offset.
+        var hit := _world_on_level(at, drag_position_start.y, drag_grab_point)
+        var offset: Vector3 = hit - drag_grab_point
+        if axis_index == 0 or axis_index == 1:
+            position.x += offset.x
+        if axis_index == 0 or axis_index == 3:
+            position.z += offset.z
+    node.position = position
+
+func _two_finger_camera(changed_index: int, old_position: Vector2, new_position: Vector2) -> void:
+    var indices: Array = touches.keys()
+    var other_index: int = indices[0] if indices[1] == changed_index else indices[1]
+    var other_position: Vector2 = touches[other_index]
+    var old_distance := old_position.distance_to(other_position)
+    var new_distance := new_position.distance_to(other_position)
+    if old_distance > 2.0 and new_distance > 2.0:
+        orbit_distance = clampf(orbit_distance * old_distance / new_distance, 2.0, 30.0)
+
+    # The midpoint follows two fingers: intuitive world-space camera panning.
+    var midpoint_motion := (new_position - old_position) * 0.5
+    var world_per_pixel: float = 2.0 * orbit_distance * tan(deg_to_rad(editor_camera.fov) * 0.5) / maxf(preview_box.size.y, 1.0)
+    orbit_target += (editor_camera.global_transform.basis.x * -midpoint_motion.x + editor_camera.global_transform.basis.y * midpoint_motion.y) * world_per_pixel
+    _update_camera()
 
 func _orbit(motion: Vector2) -> void:
     orbit_yaw -= motion.x * 0.008
     orbit_pitch = clampf(orbit_pitch + motion.y * 0.008, 0.08, 1.45)
     _update_camera()
 
-func _pick_object(screen_position: Vector2) -> void:
-    var origin := editor_camera.project_ray_origin(screen_position)
-    var end := origin + editor_camera.project_ray_normal(screen_position) * 250.0
-    var query := PhysicsRayQueryParameters3D.create(origin, end)
+func _viewport_position(local: Vector2) -> Vector2:
+    # SubViewportContainer stretches the render target to fit the Android UI.
+    return local * Vector2(preview.size) / preview_box.size
+
+func _world_on_level(local: Vector2, height: float, fallback: Vector3) -> Vector3:
+    var screen_pos := _viewport_position(local)
+    var origin := editor_camera.project_ray_origin(screen_pos)
+    var direction := editor_camera.project_ray_normal(screen_pos)
+    var world_hit: Variant = Plane(Vector3.UP, height).intersects_ray(origin, direction)
+    if world_hit is Vector3:
+        return world_hit
+    return fallback
+
+func _hit_object_id(local: Vector2) -> String:
+    var screen_pos := _viewport_position(local)
+    var origin := editor_camera.project_ray_origin(screen_pos)
+    var direction := editor_camera.project_ray_normal(screen_pos)
+    var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * 250.0)
     var hit: Dictionary = preview.world_3d.direct_space_state.intersect_ray(query)
     if hit.is_empty():
-        return
+        return ""
     var body: Object = hit.get("collider")
     if body != null and body.has_meta("movie_id"):
-        _set_selection(str(body.get_meta("movie_id")))
+        return str(body.get_meta("movie_id"))
+    return ""
+
+func _pick_object(screen_position: Vector2) -> void:
+    var id := _hit_object_id(screen_position)
+    if not id.is_empty():
+        _set_selection(id)
 
 func _add_object(kind: String) -> void:
     _set_playing(false)
@@ -326,15 +439,51 @@ func _create_object(id: String, kind: String, pos: Vector3, angles: Vector3, tin
     body.set_meta("movie_id", id)
     body.add_child(collision)
     node.add_child(body)
+    _add_selection_frame(node, kind)
     objects_by_id[id] = node
     _refresh_selector()
     _refresh_timeline()
+
+func _add_selection_frame(node: Node3D, kind: String) -> void:
+    var extent: float = 0.68 if kind == "sphere" else 0.58
+    var corners: Array[Vector3] = [
+        Vector3(-extent, -extent, -extent), Vector3(extent, -extent, -extent),
+        Vector3(extent, -extent, extent), Vector3(-extent, -extent, extent),
+        Vector3(-extent, extent, -extent), Vector3(extent, extent, -extent),
+        Vector3(extent, extent, extent), Vector3(-extent, extent, extent)
+    ]
+    var segments := [
+        Vector2i(0, 1), Vector2i(1, 2), Vector2i(2, 3), Vector2i(3, 0),
+        Vector2i(4, 5), Vector2i(5, 6), Vector2i(6, 7), Vector2i(7, 4),
+        Vector2i(0, 4), Vector2i(1, 5), Vector2i(2, 6), Vector2i(3, 7)
+    ]
+    var lines := ImmediateMesh.new()
+    lines.surface_begin(Mesh.PRIMITIVE_LINES)
+    for segment in segments:
+        lines.surface_add_vertex(corners[segment.x])
+        lines.surface_add_vertex(corners[segment.y])
+    lines.surface_end()
+    var frame := MeshInstance3D.new()
+    frame.name = "SelectionFrame"
+    frame.mesh = lines
+    frame.visible = false
+    var material := StandardMaterial3D.new()
+    material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+    material.albedo_color = Color("#ffcb67")
+    material.no_depth_test = true
+    frame.material_override = material
+    node.add_child(frame)
 
 func _set_selection(id: String) -> void:
     if not objects_by_id.has(id):
         return
     selected_id = id
     selection.text = "%s ▾" % (objects_by_id[id] as Node3D).name
+    for object_id in objects_by_id.keys():
+        var object_node: Node3D = objects_by_id[object_id]
+        var frame: Node3D = object_node.get_node_or_null("SelectionFrame")
+        if frame != null:
+            frame.visible = str(object_id) == selected_id
     _show_message("選択中: %s" % (objects_by_id[id] as Node3D).name)
 
 func _refresh_selector() -> void:
@@ -352,8 +501,8 @@ func _cycle_mode() -> void:
     mode_option.text = ("移動 ↻" if mode_index == 0 else "回転 ↻")
 
 func _cycle_axis() -> void:
-    axis_index = (axis_index + 1) % 3
-    axis_option.text = ["X ↻", "Y ↻", "Z ↻"][axis_index]
+    axis_index = (axis_index + 1) % 4
+    axis_option.text = ["自由 ↻", "X ↻", "Y ↻", "Z ↻"][axis_index]
 
 func _build_picker() -> void:
     # A native OptionButton PopupMenu is hard to dismiss on Android.
@@ -446,7 +595,8 @@ func _nudge(direction: float) -> void:
         return
     _set_playing(false)
     var node: Node3D = objects_by_id[selected_id]
-    var axis := axis_index
+    # '+'/'-' is a precise fallback for touch gestures.
+    var axis: int = 0 if mode_index == 0 and axis_index == 0 else (1 if axis_index == 0 else axis_index - 1)
     if mode_index == 0:
         var pos := node.position
         pos[axis] += direction * 0.25
