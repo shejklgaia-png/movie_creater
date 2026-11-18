@@ -19,3 +19,5 @@ jobs:
         run: /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --editor --quit
       - name: Headless startup smoke test
         run: /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --quit-after 20
+      - name: Direct manipulation integration test
+        run: /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_touch_drag.gd
