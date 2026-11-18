@@ -132,11 +132,28 @@ func _test() -> void:
         _fail("Edited model was omitted from serialization")
         return
 
+    # Real user:// save-load round trip, including source model + edited nodes.
+    editor.call("_save_project")
+    editor.call("_load_project")
+    editor.call("_seek", 1.0)
+    var loaded_assets: Dictionary = editor.get("bb_assets")
+    if not loaded_assets.has(model_id):
+        _fail("Saved Blockbench model was not restored")
+        return
+    var loaded_arm: Node3D = loaded_assets[model_id]["groups"]["arm"]["node"]
+    if not _close(loaded_arm.rotation_degrees.y, 100.0, 0.25):
+        _fail("Saved bone rotation correction disappeared after reload")
+        return
+    var loaded_mesh: Node3D = (editor.get("objects_by_id") as Dictionary)[model_id].get_node_or_null(NodePath(mesh_path))
+    if loaded_mesh == null or not _close(loaded_mesh.position.x - static_initial.x, 0.12, 0.03):
+        _fail("Saved static mesh transform correction disappeared after reload")
+        return
+    editor.call("_set_part_selection", model_id, mesh_path)
     editor.call("_reset_selected_transform")
     editor.call("_seek", 0.5)
-    if not _close(mesh_part.position.x - static_initial.x, 0.0, 0.02):
+    if not _close(loaded_mesh.position.x - static_initial.x, 0.0, 0.02):
         _fail("Reset did not remove mesh transform override")
         return
 
-    print("PART EDITOR TEST PASSED: right preview UI, hierarchy, scale/rotate/move, numeric edits, animated offsets, nonaccumulation, save")
+    print("PART EDITOR TEST PASSED: preview toolbar, hierarchy, move/rotate/scale, numeric editing, nonaccumulation, file save/load")
     quit(0)
