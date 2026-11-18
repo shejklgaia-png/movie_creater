@@ -173,7 +173,7 @@ func _choose_bbmodel() -> void:
     # Android native Storage Access Framework; FileAccess supports returned content:// URI.
     if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
         var err: Error = DisplayServer.file_dialog_show(
-            "Blockbenchモデルを開く", "", "", "", false,
+            "Blockbenchモデルを開く", "", "", false,
             DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
             PackedStringArray(["*.bbmodel,*.json;Blockbenchモデル;application/json,application/octet-stream"]),
             _on_native_bbmodel_chosen)
@@ -248,7 +248,7 @@ func _cycle_bb_animation() -> void:
     if clips.is_empty():
         _show_message("このモデルにモーションはありません")
         return
-    asset["clip_index"] = (int(asset["clip_index"]) + 1) % (clips.size() + 1) - 1
+    asset["clip_index"] = (int(asset["clip_index"]) + 2) % (clips.size() + 1) - 1
     bb_assets[selected_id] = asset
     _refresh_motion_button()
     _sample_bb_animations()
