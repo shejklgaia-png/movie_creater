@@ -301,6 +301,9 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     }
     _refresh_selector()
     _set_selection(id)
+    var imported_clips: Array = result.get("animations", [])
+    if not imported_clips.is_empty():
+        _add_animation_clip(id, 0, 0.0)
     _refresh_timeline()
     _seek(current_time)
     # Animate first, then frame the *actual displayed* pose (not rest pose).
@@ -377,6 +380,12 @@ func _focus_bbmodel(model: Node3D) -> void:
     _update_camera()
 
 func _focus_selected() -> void:
+    if selected_id == "__camera__":
+        orbit_target = shot_camera.global_position
+        orbit_distance = 4.0
+        _update_camera()
+        _show_message("撮影カメラへ注視しました")
+        return
     if not objects_by_id.has(selected_id):
         _show_message("注視するモデルを選択してください")
         return
@@ -384,6 +393,9 @@ func _focus_selected() -> void:
     _show_message("注視点を %s に合わせました" % _model_title(selected_id))
 
 func _cycle_bb_animation() -> void:
+    _open_motion_picker()
+
+func _unused_legacy_animation_switch() -> void:
     if not bb_assets.has(selected_id):
         _show_message("先にBBモデルを選択してください")
         return
@@ -400,28 +412,112 @@ func _cycle_bb_animation() -> void:
 func _refresh_motion_button() -> void:
     if motion_button == null:
         return
-    motion_button.text = "モーション：なし ▷"
+    motion_button.text = "＋アニメを配置"
     if not bb_assets.has(selected_id):
         return
     var asset: Dictionary = bb_assets[selected_id]
     var clips: Array = asset.get("clips", [])
     var selected := int(asset.get("clip_index", -1))
     if selected >= 0 and selected < clips.size():
-        motion_button.text = "モーション：%s ▷" % _short_text(str(clips[selected].get("name", "Animation")), 18)
+        motion_button.text = "＋アニメを配置"
 
 func _sample_bb_animations() -> void:
     var sampler := BBModelImporter.new()
     for id_value in bb_assets.keys():
-        var asset: Dictionary = bb_assets[id_value]
-        var clips: Array = asset.get("clips", [])
-        var index := int(asset.get("clip_index", -1))
-        if index < 0 or index >= clips.size():
+        var id := str(id_value)
+        var asset: Dictionary = bb_assets[id]
+        var available: Array = asset.get("clips", [])
+        var active: Dictionary = ClipEngine.active_clip(clip_tracks.get(id, []), current_time)
+        if active.is_empty():
             sampler.apply_clip(asset["groups"], {}, 0.0, bool(asset["old_format"]))
             continue
-        var clip: Dictionary = clips[index]
-        var clip_length := maxf(0.01, float(clip.get("length", 0.01)))
-        var anim_time := fposmod(current_time, clip_length) if str(clip.get("loop", "")) == "loop" else minf(current_time, clip_length)
-        sampler.apply_clip(asset["groups"], clip, anim_time, bool(asset["old_format"]))
+        var source_index := int(active.get("animation_index", -1))
+        if source_index < 0 or source_index >= available.size():
+            sampler.apply_clip(asset["groups"], {}, 0.0, bool(asset["old_format"]))
+            continue
+        var source_time := ClipEngine.source_time(active, current_time)
+        sampler.apply_clip(asset["groups"], available[source_index], source_time,
+            bool(asset["old_format"]), active.get("enabled_groups", null))
+
+func _animation_duration(source: Dictionary) -> float:
+    var declared := float(source.get("length", 0.0))
+    if declared > 0.0:
+        return declared
+    var max_time := 0.0
+    for value in source.get("animators", {}).values():
+        if value is Dictionary:
+            for frame in value.get("keyframes", []):
+                if frame is Dictionary:
+                    max_time = maxf(max_time, float(frame.get("time", 0.0)))
+    return maxf(0.05, max_time)
+
+func _add_animation_clip(model_id: String, animation_index: int, at: float) -> void:
+    if not bb_assets.has(model_id):
+        return
+    var asset: Dictionary = bb_assets[model_id]
+    var animations: Array = asset.get("clips", [])
+    if animation_index < 0 or animation_index >= animations.size():
+        return
+    var group_ids: Array = []
+    for uuid in (asset["groups"] as Dictionary).keys():
+        group_ids.append(str(uuid))
+    var uid := "clip_%d" % next_clip_id
+    next_clip_id += 1
+    var new_clip: Dictionary = ClipEngine.new_clip(uid, animation_index,
+        _animation_duration(animations[animation_index]), at, group_ids)
+    var rows: Array = clip_tracks.get(model_id, [])
+    rows.append(new_clip)
+    clip_tracks[model_id] = rows
+    asset["clip_index"] = animation_index
+    bb_assets[model_id] = asset
+    _refresh_timeline()
+    _seek(current_time)
+    _show_message("動作を配置: %s" % _short_text(str(animations[animation_index].get("name", "Animation")), 19))
+
+func _find_clip_index(model_id: String, uid: String) -> int:
+    var rows: Array = clip_tracks.get(model_id, [])
+    for i in range(rows.size()):
+        if str(rows[i].get("uid", "")) == uid:
+            return i
+    return -1
+
+func _on_clip_dragged(model_id: String, uid: String, at: float, _finished: bool) -> void:
+    var index := _find_clip_index(model_id, uid)
+    if index < 0:
+        return
+    _set_playing(false)
+    var rows: Array = clip_tracks[model_id]
+    var clip: Dictionary = rows[index]
+    clip["start"] = snappedf(clampf(at, 0.0, maxf(0.0, DURATION - ClipEngine.clip_length(clip))), 0.01)
+    rows[index] = clip
+    clip_tracks[model_id] = rows
+    _refresh_timeline()
+    _seek(current_time)
+
+func _open_motion_picker() -> void:
+    if not bb_assets.has(selected_id):
+        _show_message("動作を配置するBBモデルを選択してください")
+        return
+    picker_mode = "animation"
+    picker_title.text = "追加するモーション"
+    for child in picker_list.get_children():
+        picker_list.remove_child(child)
+        child.queue_free()
+    var animations: Array = bb_assets[selected_id]["clips"]
+    for i in range(animations.size()):
+        var animation: Dictionary = animations[i]
+        var button := Button.new()
+        button.text = _short_text(str(animation.get("name", "Animation")), 26)
+        button.custom_minimum_size.y = 54.0
+        button.clip_text = true
+        button.pressed.connect(_pick_animation.bind(selected_id, i))
+        picker_list.add_child(button)
+    picker_overlay.show()
+
+func _pick_animation(model_id: String, animation_index: int) -> void:
+    _close_picker()
+    _add_animation_clip(model_id, animation_index, current_time)
+
 
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
@@ -638,11 +734,11 @@ func _begin_pointer(at: Vector2) -> void:
     if not drag_target_id.is_empty():
         _set_playing(false)
         _set_selection(drag_target_id)
-        var node: Node3D = objects_by_id[drag_target_id]
+        var node: Node3D = shot_camera if drag_target_id == "__camera__" else objects_by_id[drag_target_id]
         drag_position_start = node.position
         drag_rotation_start = node.rotation_degrees
         var target_height := node.position.y
-        if str(node.get_meta("kind", "")) == "bbmodel":
+        if drag_target_id != "__camera__" and str(node.get_meta("kind", "")) == "bbmodel":
             target_height = _bbmodel_bounds(node).get_center().y
         drag_grab_point = _world_on_level(at, target_height, node.position)
 
@@ -670,16 +766,19 @@ func _finish_pointer(at: Vector2) -> void:
     if drag_moved and not drag_target_id.is_empty():
         _apply_model_drag(at)
         # A completed direct manipulation always produces a persistent keyframe.
-        _insert_key()
+        if drag_target_id == "__camera__":
+            _insert_camera_key()
+        else:
+            _insert_key()
         _show_message("指で編集した姿勢を %.2f 秒に記録しました" % current_time)
     pointer_active = false
     drag_moved = false
     drag_target_id = ""
 
 func _apply_model_drag(at: Vector2) -> void:
-    if not objects_by_id.has(drag_target_id):
+    if drag_target_id != "__camera__" and not objects_by_id.has(drag_target_id):
         return
-    var node: Node3D = objects_by_id[drag_target_id]
+    var node: Node3D = shot_camera if drag_target_id == "__camera__" else objects_by_id[drag_target_id]
     if mode_index == 1:
         # Drag horizontally to rotate. In 'free' mode, rotate about world Y.
         var axis: int = 1 if axis_index == 0 else axis_index - 1
@@ -938,11 +1037,11 @@ func _build_picker() -> void:
 
     var title_row := HBoxContainer.new()
     contents.add_child(title_row)
-    var title := Label.new()
-    title.text = "モデルを選択"
-    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    title.add_theme_font_size_override("font_size", 20)
-    title_row.add_child(title)
+    picker_title = Label.new()
+    picker_title.text = "モデルを選択"
+    picker_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    picker_title.add_theme_font_size_override("font_size", 20)
+    title_row.add_child(picker_title)
     _make_button(title_row, "✕ 閉じる", _close_picker)
 
     var scroll := ScrollContainer.new()
@@ -957,6 +1056,8 @@ func _toggle_picker() -> void:
     if picker_overlay.visible:
         _close_picker()
         return
+    picker_mode = "model"
+    picker_title.text = "モデルを選択"
     _refresh_picker_list()
     picker_overlay.show()
 
@@ -964,6 +1065,11 @@ func _refresh_picker_list() -> void:
     for child in picker_list.get_children():
         picker_list.remove_child(child)
         child.queue_free()
+    var camera_button := Button.new()
+    camera_button.text = "🎥 撮影カメラ"
+    camera_button.custom_minimum_size.y = 56.0
+    camera_button.pressed.connect(_choose_model.bind("__camera__"))
+    picker_list.add_child(camera_button)
     for id_value in objects_by_id.keys():
         var item_id := str(id_value)
         var button := Button.new()
