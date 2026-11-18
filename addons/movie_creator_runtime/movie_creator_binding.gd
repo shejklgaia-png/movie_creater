@@ -21,8 +21,18 @@ static func bind(root: Node, object_id: String, explicit_path: NodePath = NodePa
 		var explicit_node := root.get_node_or_null(explicit_path)
 		if explicit_node is Node3D:
 			return explicit_node
-	var matches: Dictionary = index_scene(root)
-	return matches.get(object_id) as Node3D
+	var matches: Array[Node3D] = []
+	_collect_matches(root, object_id, matches)
+	if matches.size() > 1:
+		push_warning("Movie Creator: duplicate movie_creator_id '%s' in game scene" % object_id)
+		return null
+	return matches[0] if matches.size() == 1 else null
+
+static func _collect_matches(node: Node, object_id: String, matches: Array[Node3D]) -> void:
+	if node is Node3D and str(node.get_meta("movie_creator_id", "")) == object_id:
+		matches.append(node)
+	for child in node.get_children():
+		_collect_matches(child, object_id, matches)
 
 ## All values are Godot local-space transforms, never global-space offsets.
 ## Return false rather than silently applying a malformed transform.

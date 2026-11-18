@@ -60,6 +60,34 @@ Android **縦画面**を最優先に開発する、ゲーム用3Dムービーシ
 
 アプリのローカル領域 `user://movie_project.json` にJSONを保存します。読み込んだbbmodelの内容（埋め込みテクスチャ含む）もプロジェクト内に保存するため、アプリを再起動しても復元できます。Androidではアプリ専用領域のため、現時点では「ファイルを共有」や端末上の任意ファイル選択は未対応です。アプリのデータを消すと保存内容も失われる可能性があります。
 
+## Ver.0.8：Godotゲーム内でムービーを再生する（自動接続）
+
+Movie Creatorから「Godot再生データを書き出す」でJSONを保存し、ゲームプロジェクトの`res://`以下へ置いてください。データは既存モデルを参照する軽量形式のため、モデル・AnimationPlayer自体はゲーム側で用意します。
+
+```gdscript
+const MoviePlayer = preload("res://addons/movie_creator_runtime/movie_player.gd")
+
+func _ready() -> void:
+    # JSONに書かれるオブジェクトIDと一致する値をモデルに設定
+    $Character.set_meta("movie_creator_id", "1")
+    var movie = MoviePlayer.new()
+    add_child(movie)
+    var data = JSON.parse_string(FileAccess.get_file_as_string("res://intro.movie.json"))
+    if not (data is Dictionary) or not movie.configure(data, $Camera3D):
+        push_error("Movie Creator: 再生データを読み込めません")
+        return
+    var result = movie.auto_bind_scene(self)
+    if not result["missing"].is_empty():
+        push_warning("ムービー未接続のモデルID: " + str(result["missing"]))
+    movie.play()
+```
+
+- モデルごとに`movie_creator_id`というメタデータを付けます。同じIDの複数モデルは誤接続を防ぐため接続しません。単独モデルを直接指定する従来の`bind_model(id, node)`も利用できます。
+- モデル配下に`AnimationPlayer`が**一つ**あれば、エクスポートされた元のアニメーション名からクリップを自動再生・シークします。別の位置にある場合は`bind_animation_player(id, animation_player)`で明示します。
+- Blockbenchの関節マスクは、JSON内の`group_paths`とゲーム側のNode3Dパスが一致するモデルで適用します。GLB/Skeleton3Dのボーン対応付け、階層が異なるモデルへのリターゲット、複数AnimationPlayerの自動合成にはまだ対応していません。対応できないモーションは従来の`animation_frame`シグナルによるゲーム固有再生処理が必要です。
+- `seek(seconds)`、`pause()`、`skip(restore_scene)`、`restore()`は引き続き使用できます。終了後も再生をやり直す場合は`restore()`で状態を戻せます。
+- エディタのカメラキーはローカル座標です。ゲーム側でもカメラ／モデルの親座標系を揃えてください。異なる親座標系での完全一致は今後の開発対象です。
+
 ## 設計とソース
 
 - `scripts/editor.gd`: UI、3Dプレビュー、オブジェクト管理、タイムライン再生、保存・読込

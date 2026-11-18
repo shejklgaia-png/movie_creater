@@ -494,6 +494,25 @@ func _serialize_runtime_data() -> Dictionary:
     for entry in scene_data.get("objects", []):
         var row: Dictionary = entry.duplicate(true)
         row.erase("bb_source")
+        var model_id := str(entry.get("id", ""))
+        # Keep the portable export small but preserve the Blockbench identity
+        # needed to play matching Godot animations and mask individual joints.
+        if bb_assets.has(model_id):
+            var asset: Dictionary = bb_assets[model_id]
+            var animation_names: Array = []
+            for animation_value in asset.get("clips", []):
+                if animation_value is Dictionary:
+                    animation_names.append(str(animation_value.get("name", "")))
+            row["animation_names"] = animation_names
+            var group_paths: Dictionary = {}
+            var model: Node3D = objects_by_id.get(model_id) as Node3D
+            if model != null:
+                for uuid_value in (asset.get("groups", {}) as Dictionary).keys():
+                    var group: Dictionary = asset["groups"][uuid_value]
+                    var part: Node3D = group.get("node") as Node3D
+                    if part != null and model.is_ancestor_of(part):
+                        group_paths[str(uuid_value)] = str(model.get_path_to(part))
+            row["group_paths"] = group_paths
         export_objects.append(row)
     scene_data["objects"] = export_objects
     scene_data.erase("version")
