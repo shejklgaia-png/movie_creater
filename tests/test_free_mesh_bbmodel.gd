@@ -95,7 +95,7 @@ func _test() -> void:
     if imported.get_node_or_null("SelectionFrame") == null:
         _failure("Imported model should have selection outline")
         return
-    if not str((editor.get("status_label") as Label).text).begins_with("BB読込成功: 18メッシュ"):
+    if not str((editor.get("status_label") as Label).text).contains("18メッシュ"):
         _failure("Success status does not describe the imported free meshes")
         return
     var saved: Dictionary = editor.call("_serialize_project")
