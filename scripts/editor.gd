@@ -84,7 +84,7 @@ func _build_interface() -> void:
     preview = SubViewport.new()
     preview.size = Vector2i(432, 520)
     preview.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-    preview.use_own_world_3d = true
+    preview.own_world_3d = true
     preview_box.add_child(preview)
 
     var dock := VBoxContainer.new()
