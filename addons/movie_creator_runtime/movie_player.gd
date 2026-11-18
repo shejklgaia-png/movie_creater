@@ -18,12 +18,14 @@ signal animation_frame(model_id: String, animation_index: int, source_time: floa
 const Cuts = preload("res://addons/movie_creator_runtime/camera_cuts.gd")
 const Clips = preload("res://addons/movie_creator_runtime/clip_engine.gd")
 const Poses = preload("res://addons/movie_creator_runtime/pose_track.gd")
+const Binding = preload("res://addons/movie_creator_runtime/movie_creator_binding.gd")
 
 var project: Dictionary = {}
 var camera_node: Camera3D
 var bound_models: Dictionary = {}
 var original_transforms: Dictionary = {}
 var part_baselines: Dictionary = {}
+var animation_bindings: Dictionary = {}
 var time := 0.0
 var duration := 0.0
 var playing := false
@@ -41,7 +43,28 @@ func configure(data: Dictionary, movie_camera: Camera3D = null) -> bool:
     playing = false
     return true
 
+## Bind all models carrying an explicit movie_creator_id in the supplied scene.
+## No name guessing: duplicate or missing IDs are reported, not silently misbound.
+func auto_bind_scene(scene_root: Node) -> Dictionary:
+    var connected: Array[String] = []
+    var missing: Array[String] = []
+    for value in project.get("objects", []):
+        if not (value is Dictionary):
+            continue
+        var model_id := str(value.get("id", ""))
+        if model_id.is_empty():
+            continue
+        var node: Node3D = Binding.bind(scene_root, model_id)
+        if node == null:
+            missing.append(model_id)
+            continue
+        bind_model(model_id, node)
+        connected.append(model_id)
+    return {"bound": connected, "missing": missing}
+
 func bind_model(model_id: String, node: Node3D) -> void:
+    if bound_models.has(model_id):
+        unbind_model(model_id)
     bound_models[model_id] = node
     original_transforms[model_id] = node.transform
     var parts: Dictionary = {}
@@ -55,6 +78,11 @@ func bind_model(model_id: String, node: Node3D) -> void:
     if animated_parts is Dictionary:
         for path in animated_parts.keys():
             selected_paths[str(path)] = true
+    # Native AnimationPlayer tracks must also have rest-pose baselines.
+    # Exported group UUID -> NodePath mapping is used for joint masking.
+    var group_paths: Dictionary = record.get("group_paths", {})
+    for path_value in group_paths.values():
+        selected_paths[str(path_value)] = true
     for path in selected_paths.keys():
         var child: Node3D = node.get_node_or_null(NodePath(str(path))) as Node3D
         if child != null:
@@ -64,8 +92,109 @@ func bind_model(model_id: String, node: Node3D) -> void:
                 "scale": child.scale
             }
     part_baselines[model_id] = parts
+    var candidates: Array[Node] = node.find_children("*", "AnimationPlayer", true, false)
+    if candidates.size() == 1:
+        bind_animation_player(model_id, candidates[0] as AnimationPlayer)
+    elif candidates.size() > 1:
+        push_warning("Movie Creator: multiple AnimationPlayers on '%s'; use bind_animation_player explicitly" % model_id)
+
+## A native AnimationPlayer with matching animation names is sought automatically.
+## For unusual scene layouts, bind an AnimationPlayer explicitly instead.
+func bind_animation_player(model_id: String, animator: AnimationPlayer) -> bool:
+    if animator == null or not bound_models.has(model_id):
+        return false
+    _release_animation_player(model_id)
+    var record: Dictionary = _record_for(model_id)
+    var names: Array = record.get("animation_names", [])
+    if names.is_empty() and bound_models[model_id].has_meta("movie_creator_animation_names"):
+        var named: Variant = bound_models[model_id].get_meta("movie_creator_animation_names")
+        if named is Array:
+            names = named
+    if names.is_empty():
+        return false
+    animation_bindings[model_id] = {
+        "player": animator,
+        "names": names.duplicate(),
+        "original_mode": animator.callback_mode_process,
+        "last_animation": ""
+    }
+    # Deterministic cutscene seeking: gameplay clock must not independently
+    # advance the AnimationPlayer between our explicit sampled frames.
+    animator.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
+    return true
+
+func _release_animation_player(model_id: String) -> void:
+    if not animation_bindings.has(model_id):
+        return
+    var bound: Dictionary = animation_bindings[model_id]
+    var animator: AnimationPlayer = bound["player"]
+    if is_instance_valid(animator):
+        animator.stop()
+        animator.callback_mode_process = int(bound["original_mode"])
+    animation_bindings.erase(model_id)
+
+func _resolve_native_animation(animator: AnimationPlayer, wanted: String) -> String:
+    if animator.has_animation(wanted):
+        return wanted
+    var matches: Array[String] = []
+    for name_value in animator.get_animation_list():
+        var name := str(name_value)
+        if name.get_file() == wanted:
+            matches.append(name)
+    return matches[0] if matches.size() == 1 else ""
+
+func _apply_native_animation(model_id: String, record: Dictionary, active: Dictionary) -> void:
+    if not animation_bindings.has(model_id):
+        return
+    var binding: Dictionary = animation_bindings[model_id]
+    var animator: AnimationPlayer = binding["player"]
+    if not is_instance_valid(animator):
+        animation_bindings.erase(model_id)
+        return
+    if active.is_empty():
+        if str(binding["last_animation"]) != "":
+            animator.stop(true)
+            binding["last_animation"] = ""
+            animation_bindings[model_id] = binding
+        return
+    var index := int(active.get("animation_index", -1))
+    var names: Array = binding["names"]
+    if index < 0 or index >= names.size():
+        return
+    var selected := _resolve_native_animation(animator, str(names[index]))
+    if selected.is_empty():
+        return # Keep the signal-driven adapter fallback intact.
+    var group_paths: Dictionary = record.get("group_paths", {})
+    var enabled: Variant = active.get("enabled_groups", null)
+    # A masked clip without UUID-to-node paths cannot be reproduced safely.
+    if enabled is Array and group_paths.is_empty() and not enabled.is_empty():
+        return
+    if str(binding["last_animation"]) != selected:
+        animator.play(selected)
+    var source_time := Clips.source_time(active, time)
+    var animation: Animation = animator.get_animation(selected)
+    animator.seek(clampf(source_time, 0.0, animation.length), true, true)
+    binding["last_animation"] = selected
+    animation_bindings[model_id] = binding
+    if enabled is Array:
+        var model: Node3D = bound_models[model_id]
+        var baselines: Dictionary = part_baselines.get(model_id, {})
+        for group_value in group_paths.keys():
+            if enabled.has(str(group_value)):
+                continue
+            var path := str(group_paths[group_value])
+            if not baselines.has(path):
+                continue
+            var part: Node3D = model.get_node_or_null(NodePath(path)) as Node3D
+            if part == null:
+                continue
+            var base: Dictionary = baselines[path]
+            part.position = base["position"]
+            part.rotation_degrees = base["rotation"]
+            part.scale = base["scale"]
 
 func unbind_model(model_id: String) -> void:
+    _release_animation_player(model_id)
     bound_models.erase(model_id)
     original_transforms.erase(model_id)
     part_baselines.erase(model_id)
@@ -95,6 +224,13 @@ func skip(restore_scene: bool = false) -> void:
 
 func restore() -> void:
     playing = false
+    for model_id in animation_bindings.keys():
+        var binding: Dictionary = animation_bindings[model_id]
+        var animator: AnimationPlayer = binding["player"]
+        if is_instance_valid(animator):
+            animator.stop(true)
+        binding["last_animation"] = ""
+        animation_bindings[model_id] = binding
     for model_id in bound_models.keys():
         var node: Node3D = bound_models[model_id]
         if not is_instance_valid(node):
@@ -146,6 +282,7 @@ func seek(seconds: float) -> void:
             child.scale = base["scale"]
 
         var active: Dictionary = Clips.active_clip(record.get("animation_clips", []), time)
+        _apply_native_animation(model_id, record, active)
         if not active.is_empty():
             var included: Array = active.get("enabled_groups", [])
             animation_frame.emit(model_id, int(active.get("animation_index", -1)),
@@ -179,6 +316,10 @@ func seek(seconds: float) -> void:
             camera_node.position = sample["position"]
             camera_node.quaternion = sample["orientation"]
             camera_node.fov = float(sample["fov"])
+
+func _exit_tree() -> void:
+    for model_id in animation_bindings.keys():
+        _release_animation_player(str(model_id))
 
 func _record_for(id: String) -> Dictionary:
     for record in project.get("objects", []):
