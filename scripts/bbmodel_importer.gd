@@ -420,7 +420,7 @@ func _check_animation_features(anim: Dictionary) -> void:
                     if not warnings.has("補間方式 %s は現在線形でプレビューします" % mode):
                         warnings.append("補間方式 %s は現在線形でプレビューします" % mode)
 
-func apply_clip(groups: Dictionary, clip: Dictionary, time: float, old_format: bool) -> void:
+func apply_clip(groups: Dictionary, clip: Dictionary, time: float, old_format: bool, enabled_group_uuids: Variant = null) -> void:
     for uuid in groups.keys():
         var state: Dictionary = groups[uuid]
         var node: Node3D = state["node"]
@@ -432,6 +432,8 @@ func apply_clip(groups: Dictionary, clip: Dictionary, time: float, old_format: b
     var animators: Dictionary = clip.get("animators", {})
     for uuid in animators.keys():
         if not groups.has(uuid):
+            continue
+        if enabled_group_uuids is Array and not enabled_group_uuids.has(str(uuid)):
             continue
         var animator: Dictionary = animators[uuid]
         var frames: Array = animator.get("keyframes", [])
