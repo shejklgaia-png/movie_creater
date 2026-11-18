@@ -1,0 +1,22 @@
+name: Godot headless regression
+on:
+  push:
+    branches: [main, 'automation/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  headless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.5.2
+          use-dotnet: false
+      - name: Import project and check scenes
+        run: godot --headless --path . --editor --import --quit
+      - name: Verify transform regression
+        run: godot --headless --path . --script res://tests/transform_roundtrip.gd
