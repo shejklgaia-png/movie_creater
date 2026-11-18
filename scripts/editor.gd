@@ -375,17 +375,30 @@ func _world_on_level(local: Vector2, height: float, fallback: Vector3) -> Vector
     return fallback
 
 func _hit_object_id(local: Vector2) -> String:
+    # Ray/AABB selection in object-local coordinates; no physics server needed.
+    # This remains reliable in offscreen SubViewports and headless tests.
     var screen_pos := _viewport_position(local)
-    var origin := editor_camera.project_ray_origin(screen_pos)
-    var direction := editor_camera.project_ray_normal(screen_pos)
-    var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * 250.0)
-    var hit: Dictionary = preview.world_3d.direct_space_state.intersect_ray(query)
-    if hit.is_empty():
-        return ""
-    var body: Object = hit.get("collider")
-    if body != null and body.has_meta("movie_id"):
-        return str(body.get_meta("movie_id"))
-    return ""
+    var ray_origin := editor_camera.project_ray_origin(screen_pos)
+    var ray_dir := editor_camera.project_ray_normal(screen_pos)
+    var closest_id := ""
+    var closest_distance := INF
+    for id_value in objects_by_id.keys():
+        var id := str(id_value)
+        var node: Node3D = objects_by_id[id]
+        var mesh: MeshInstance3D = node.get_node_or_null("EditableMesh") as MeshInstance3D
+        if mesh == null:
+            continue
+        var transform_inv := mesh.global_transform.affine_inverse()
+        var local_origin: Vector3 = transform_inv * ray_origin
+        var local_direction: Vector3 = transform_inv.basis * ray_dir
+        var intersection: Variant = mesh.get_aabb().intersects_ray(local_origin, local_direction)
+        if intersection is Vector3:
+            var world_hit: Vector3 = mesh.global_transform * (intersection as Vector3)
+            var distance: float = ray_origin.distance_to(world_hit)
+            if distance < closest_distance:
+                closest_distance = distance
+                closest_id = id
+    return closest_id
 
 func _pick_object(screen_position: Vector2) -> void:
     var id := _hit_object_id(screen_position)
@@ -415,6 +428,7 @@ func _create_object(id: String, kind: String, pos: Vector3, angles: Vector3, tin
     scene_root.add_child(node)
 
     var mesh := MeshInstance3D.new()
+    mesh.name = "EditableMesh"
     var collision := CollisionShape3D.new()
     if kind == "sphere":
         var shape_mesh := SphereMesh.new()
