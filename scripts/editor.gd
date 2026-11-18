@@ -7,6 +7,7 @@ const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
 const ClipEngine = preload("res://scripts/clip_engine.gd")
 const TransformGizmo = preload("res://scripts/transform_gizmo.gd")
 const PoseTrack = preload("res://scripts/pose_track.gd")
+const CameraCuts = preload("res://scripts/camera_cuts.gd")
 const SAVE_PATH := "user://movie_project.json"
 const BACKUP_PATH := "user://movie_project.backup.json"
 const TEMP_PATH := "user://movie_project.tmp.json"
@@ -28,6 +29,12 @@ var editor_camera: Camera3D
 var shot_camera: Camera3D
 var camera_marker: MeshInstance3D
 var camera_keys: Array = []
+# Camera 1 remains camera_keys for compatibility with v1-v4 files.
+var camera_tracks: Dictionary = {}
+var camera_cuts: Array = []
+var next_camera_id := 2
+var next_cut_id := 1
+var camera_menu: PopupPanel
 var shot_preview := false
 var clip_tracks: Dictionary = {}
 var next_clip_id := 1
@@ -239,8 +246,8 @@ func _build_interface() -> void:
     timeline_scroll.add_child(timeline)
     timeline.seek_requested.connect(_seek)
     timeline.key_dragged.connect(_on_key_dragged)
-    timeline.clip_tapped.connect(_open_clip_editor)
-    timeline.clip_dragged.connect(_on_clip_dragged)
+    timeline.clip_tapped.connect(_timeline_bar_tapped)
+    timeline.clip_dragged.connect(_timeline_bar_dragged)
     timeline.vertical_pan_requested.connect(_timeline_vertical_pan)
 
     var add_row := HBoxContainer.new()
@@ -255,6 +262,7 @@ func _build_interface() -> void:
     camera_view_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     _make_button(camera_row, "視点→撮影", _copy_editor_to_shot)
     _make_button(camera_row, "カメラ◆", _insert_camera_key)
+    _make_button(camera_row, "カット", _open_camera_menu)
     var motion_row := HBoxContainer.new()
     dock.add_child(motion_row)
     motion_button = _make_button(motion_row, "＋アニメを配置", _open_motion_picker)
@@ -303,6 +311,7 @@ func _build_interface() -> void:
     _build_clip_editor()
     _build_transform_inspector()
     _build_file_menu()
+    _build_camera_menu()
     autosave_timer = Timer.new()
     autosave_timer.one_shot = true
     autosave_timer.wait_time = 20.0
@@ -1185,6 +1194,125 @@ func _update_camera() -> void:
     # Refresh size/orientation when zooming and orbiting while paused.
     _update_gizmo()
 
+func _get_camera_tracks() -> Dictionary:
+    var tracks_all: Dictionary = camera_tracks.duplicate(true)
+    tracks_all["camera_1"] = camera_keys.duplicate(true)
+    return tracks_all
+
+func _get_camera_keys(camera_id: String) -> Array:
+    if camera_id == "camera_1":
+        return camera_keys
+    return camera_tracks.get(camera_id, [])
+
+func _set_camera_keys(camera_id: String, keys: Array) -> void:
+    if camera_id == "camera_1":
+        camera_keys = keys
+    else:
+        camera_tracks[camera_id] = keys
+
+func _active_camera_id() -> String:
+    var camera_id: String = CameraCuts.active_camera(camera_cuts, current_time)
+    if not _get_camera_tracks().has(camera_id):
+        return "camera_1"
+    return camera_id
+
+func _build_camera_menu() -> void:
+    camera_menu = PopupPanel.new()
+    add_child(camera_menu)
+    var content := VBoxContainer.new()
+    content.custom_minimum_size.x = 260
+    camera_menu.add_child(content)
+    _make_button(content, "＋ 新しい撮影カメラ", func():
+        camera_menu.hide()
+        _new_camera_and_cut())
+    _make_button(content, "✕ 現在のカットを削除", func():
+        camera_menu.hide()
+        _remove_current_camera_cut())
+    _make_button(content, "カメラ一覧を更新", _open_camera_menu)
+
+func _open_camera_menu() -> void:
+    # Rebuild only temporary camera-entry buttons; persistent menu controls
+    # are always the first three, so their taps remain stable.
+    var content: VBoxContainer = camera_menu.get_child(0)
+    while content.get_child_count() > 3:
+        var last_child: Node = content.get_child(content.get_child_count() - 1)
+        content.remove_child(last_child)
+        last_child.queue_free()
+    for camera_id_value in _get_camera_tracks().keys():
+        var camera_id := str(camera_id_value)
+        var button := _make_button(content,
+            "🎬 ここからCam %s" % camera_id.trim_prefix("camera_"),
+            _insert_camera_cut.bind(camera_id))
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    camera_menu.popup_centered()
+
+func _new_camera_and_cut() -> void:
+    _set_playing(false)
+    var camera_id := "camera_%d" % next_camera_id
+    next_camera_id += 1
+    var frame := {
+        "time": 0.0,
+        "position": [editor_camera.position.x, editor_camera.position.y, editor_camera.position.z],
+        "rotation": [editor_camera.rotation.x, editor_camera.rotation.y, editor_camera.rotation.z],
+        "fov": editor_camera.fov
+    }
+    camera_tracks[camera_id] = [frame]
+    _insert_camera_cut(camera_id)
+
+func _insert_camera_cut(camera_id: String) -> void:
+    if not _get_camera_tracks().has(camera_id):
+        return
+    _set_playing(false)
+    var uid := "cut_%d" % next_cut_id
+    next_cut_id += 1
+    camera_cuts = CameraCuts.insert_cut(camera_cuts, uid, camera_id, current_time, DURATION)
+    if camera_menu != null:
+        camera_menu.hide()
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("%.2f秒から%sを撮影に使用" % [current_time, camera_id])
+
+func _remove_current_camera_cut() -> void:
+    var winner := ""
+    var chosen_time := -INF
+    for entry in camera_cuts:
+        var t := float(entry.get("time", 0.0))
+        if t <= current_time and t >= chosen_time:
+            winner = str(entry.get("uid", ""))
+            chosen_time = t
+    if winner.is_empty():
+        _show_message("削除するカットがありません")
+        return
+    camera_cuts = CameraCuts.remove_cut(camera_cuts, winner)
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("撮影カットを削除しました")
+
+func _timeline_bar_tapped(model_id: String, uid: String) -> void:
+    if model_id != "__cuts__":
+        _open_clip_editor(model_id, uid)
+        return
+    for cut in camera_cuts:
+        if str(cut.get("uid", "")) == uid:
+            _seek(float(cut.get("time", 0.0)))
+            _show_message("カット: %s" % str(cut.get("camera_id", "camera_1")))
+            return
+    _show_message("デフォルトカメラ（Cam 1）")
+
+func _timeline_bar_dragged(model_id: String, uid: String, seconds: float, finished: bool) -> void:
+    if model_id != "__cuts__":
+        _on_clip_dragged(model_id, uid, seconds, finished)
+        return
+    if uid == "implicit":
+        return
+    camera_cuts = CameraCuts.move_cut(camera_cuts, uid, seconds, DURATION)
+    _refresh_timeline()
+    _seek(current_time)
+    if finished:
+        _mark_dirty()
+
 func _capture_camera_key(at: float) -> Dictionary:
     return {
         "time": snappedf(at, 0.01),
@@ -1197,19 +1325,23 @@ func _insert_camera_key() -> void:
     _set_playing(false)
     if shot_camera == null:
         return
+    var camera_id := _active_camera_id()
+    var keys: Array = _get_camera_keys(camera_id).duplicate(true)
     var key := _capture_camera_key(current_time)
     var replaced := false
-    for i in range(camera_keys.size()):
-        if absf(float(camera_keys[i].get("time", 0.0)) - current_time) < 0.03:
-            camera_keys[i] = key
+    for i in range(keys.size()):
+        if absf(float(keys[i].get("time", 0.0)) - current_time) < 0.03:
+            keys[i] = key
             replaced = true
             break
     if not replaced:
-        camera_keys.append(key)
-    camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        keys.append(key)
+    keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+    _set_camera_keys(camera_id, keys)
     _refresh_timeline()
-    _show_message("カメラ %.2f秒 ◆%s" % [current_time, "更新" if replaced else "追加"])
+    _show_message("Cam %s %.2f秒 ◆%s" % [camera_id.trim_prefix("camera_"), current_time, "更新" if replaced else "追加"])
     _mark_dirty()
+
 
 func _toggle_camera_view() -> void:
     shot_preview = not shot_preview
@@ -1231,31 +1363,14 @@ func _copy_editor_to_shot() -> void:
     _insert_camera_key()
 
 func _sample_camera() -> void:
-    if camera_keys.is_empty():
+    var selected_id := _active_camera_id()
+    var values: Dictionary = CameraCuts.sample_keys(_get_camera_keys(selected_id), current_time)
+    if values.is_empty():
         return
-    var first: Dictionary = camera_keys[0]
-    var a: Dictionary = first
-    var b: Dictionary = camera_keys[camera_keys.size() - 1]
-    if current_time <= float(a.get("time", 0.0)):
-        b = a
-    elif current_time >= float(b.get("time", 0.0)):
-        a = b
-    else:
-        for i in range(camera_keys.size() - 1):
-            var left: Dictionary = camera_keys[i]
-            var right: Dictionary = camera_keys[i + 1]
-            if current_time >= float(left["time"]) and current_time <= float(right["time"]):
-                a = left
-                b = right
-                break
-    var t0 := float(a.get("time", 0.0))
-    var t1 := float(b.get("time", t0))
-    var mix_t := 0.0 if absf(t1 - t0) < 0.00001 else clampf((current_time - t0) / (t1 - t0), 0.0, 1.0)
-    shot_camera.position = _array_to_vec(a.get("position", [])).lerp(_array_to_vec(b.get("position", [])), mix_t)
-    var qa := Quaternion(Basis.from_euler(_array_to_vec(a.get("rotation", [])), EULER_ORDER_YXZ))
-    var qb := Quaternion(Basis.from_euler(_array_to_vec(b.get("rotation", [])), EULER_ORDER_YXZ))
-    shot_camera.quaternion = qa.slerp(qb, mix_t)
-    shot_camera.fov = lerpf(float(a.get("fov", 54.0)), float(b.get("fov", 54.0)), mix_t)
+    shot_camera.position = values["position"]
+    shot_camera.quaternion = values["orientation"]
+    shot_camera.fov = float(values.get("fov", 54.0))
+
 
 func _on_preview_input(event: InputEvent) -> void:
     if shot_preview:
