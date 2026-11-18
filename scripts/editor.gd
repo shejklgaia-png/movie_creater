@@ -1488,10 +1488,12 @@ func _serialize_project() -> Dictionary:
             "tint": str(node.get_meta("tint", "#ffffff")),
             "display_name": node.name,
             "keyframes": tracks.get(id, []),
+            "animation_clips": clip_tracks.get(id, []),
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 1, "duration": DURATION, "objects": records}
+    return {"version": 2, "duration": DURATION,
+        "camera_keys": camera_keys.duplicate(true), "objects": records}
 
 func _save_project() -> void:
     _set_playing(false)
@@ -1514,7 +1516,7 @@ func _load_project() -> void:
         return
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) != 1 or not (parsed.get("objects") is Array):
+    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2] or not (parsed.get("objects") is Array):
         _show_message("未対応のプロジェクト形式です")
         return
     for node in objects_by_id.values():
@@ -1522,6 +1524,8 @@ func _load_project() -> void:
     objects_by_id.clear()
     tracks.clear()
     bb_assets.clear()
+    clip_tracks.clear()
+    next_clip_id = 1
     selected_id = ""
     next_id = 1
     var records: Array = parsed["objects"]
@@ -1574,8 +1578,49 @@ func _load_project() -> void:
                 "clip_index": clampi(int(record.get("bb_clip_index", -1)), -1, clips.size() - 1),
                 "old_format": int(str(model.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
             }
+            var restored: Array = []
+            for clip_value in record.get("animation_clips", []):
+                if not (clip_value is Dictionary):
+                    continue
+                var stored: Dictionary = clip_value
+                var animation_index := int(stored.get("animation_index", -1))
+                if animation_index < 0 or animation_index >= clips.size():
+                    continue
+                var safe: Dictionary = ClipEngine.validate(stored,
+                    _animation_duration(clips[animation_index]), DURATION)
+                if not (safe.get("enabled_groups", null) is Array):
+                    var all_groups: Array = []
+                    for uuid in (bb_assets[id]["groups"] as Dictionary).keys():
+                        all_groups.append(str(uuid))
+                    safe["enabled_groups"] = all_groups
+                if str(safe.get("uid", "")).is_empty():
+                    safe["uid"] = "clip_%d" % next_clip_id
+                    next_clip_id += 1
+                else:
+                    var name := str(safe.get("uid", ""))
+                    if name.begins_with("clip_") and name.substr(5).is_valid_int():
+                        next_clip_id = maxi(next_clip_id, int(name.substr(5)) + 1)
+                restored.append(safe)
+            clip_tracks[id] = restored
+            if restored.is_empty() and int(parsed.get("version", 1)) == 1 and not clips.is_empty():
+                var legacy_index := clampi(int(record.get("bb_clip_index", 0)), 0, clips.size() - 1)
+                var group_ids: Array = []
+                for uuid in (bb_assets[id]["groups"] as Dictionary).keys():
+                    group_ids.append(str(uuid))
+                clip_tracks[id].append(ClipEngine.new_clip("clip_%d" % next_clip_id,
+                    legacy_index, _animation_duration(clips[legacy_index]), 0.0, group_ids))
+                next_clip_id += 1
         else:
             _create_object(id, kind, pos, angles, str(record.get("tint", "#ffffff")))
+    var loaded_camera: Variant = parsed.get("camera_keys", null)
+    if loaded_camera is Array and not loaded_camera.is_empty():
+        var cleaned: Array = []
+        for record in loaded_camera:
+            if record is Dictionary and record.has("time") and record.has("position") and record.has("rotation"):
+                cleaned.append(record.duplicate(true))
+        if not cleaned.is_empty():
+            cleaned.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+            camera_keys = cleaned
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
