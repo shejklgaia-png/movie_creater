@@ -3,6 +3,7 @@ extends Control
 ## All editor state stays in this project; other game repositories are untouched.
 
 const TimelineView = preload("res://scripts/timeline.gd")
+const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
 const SAVE_PATH := "user://movie_project.json"
 const DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
@@ -19,6 +20,9 @@ var time_slider: HSlider
 var selection: Button
 var axis_option: Button
 var mode_option: Button
+var motion_button: Button
+var bb_file_dialog: FileDialog
+var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
 var mode_index := 0
@@ -131,7 +135,14 @@ func _build_interface() -> void:
     dock.add_child(add_row)
     _make_button(add_row, "＋箱", func(): _add_object("box"))
     _make_button(add_row, "＋球", func(): _add_object("sphere"))
+    _make_button(add_row, "BB読込", _choose_bbmodel)
     _make_button(add_row, "◆ キー登録", _insert_key)
+    var motion_row := HBoxContainer.new()
+    dock.add_child(motion_row)
+    motion_button = _make_button(motion_row, "モーション：なし ▷", _cycle_bb_animation)
+    motion_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    motion_button.tooltip_text = "読み込んだモデルのアニメーションを切り替え"
+
 
     var properties := HBoxContainer.new()
     dock.add_child(properties)
@@ -156,6 +167,117 @@ func _build_interface() -> void:
     status_label.add_theme_font_size_override("font_size", 12)
     dock.add_child(status_label)
     _build_picker()
+
+func _choose_bbmodel() -> void:
+    _set_playing(false)
+    # Android native Storage Access Framework; FileAccess supports returned content:// URI.
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "Blockbenchモデルを開く", "", "", "", false,
+            DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
+            PackedStringArray(["*.bbmodel,*.json;Blockbenchモデル;application/json,application/octet-stream"]),
+            _on_native_bbmodel_chosen)
+        if err == OK:
+            return
+    # Desktop/fallback when a native picker is unavailable.
+    if bb_file_dialog == null:
+        bb_file_dialog = FileDialog.new()
+        bb_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+        bb_file_dialog.use_native_dialog = false
+        bb_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+        bb_file_dialog.add_filter("*.bbmodel,*.json", "Blockbenchモデル")
+        bb_file_dialog.file_selected.connect(_import_bbmodel_path)
+        add_child(bb_file_dialog)
+    bb_file_dialog.popup_centered_ratio(0.9)
+
+func _on_native_bbmodel_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _import_bbmodel_path(selected[0])
+
+func _import_bbmodel_path(path: String) -> void:
+    var file := FileAccess.open(path, FileAccess.READ)
+    if file == null:
+        _show_message("BBファイルを開けません: %s" % error_string(FileAccess.get_open_error()))
+        return
+    if file.get_length() > 18000000:
+        _show_message("BBファイルが18MBを超えています")
+        file.close()
+        return
+    var source := file.get_as_text()
+    file.close()
+    _import_bbmodel_text(source, path.get_file().get_basename())
+
+func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bool:
+    var importer := BBModelImporter.new()
+    var result: Dictionary = importer.import_text(source)
+    if not bool(result.get("ok", false)):
+        _show_message("BB読込エラー: %s" % str(result.get("error", "不明なエラー")))
+        return false
+    _set_playing(false)
+    var id := str(next_id)
+    next_id += 1
+    var node: Node3D = result["root"]
+    node.name = filename.validate_node_name()
+    node.set_meta("movie_id", id)
+    node.set_meta("kind", "bbmodel")
+    node.set_meta("tint", "#ffffff")
+    scene_root.add_child(node)
+    objects_by_id[id] = node
+    tracks[id] = [_capture_key(node, 0.0)]
+    var clips: Array = result.get("animations", [])
+    bb_assets[id] = {
+        "source": source, "groups": result["groups"], "clips": clips,
+        "clip_index": 0 if not clips.is_empty() else -1,
+        "old_format": int(str(node.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
+    }
+    _refresh_selector()
+    _set_selection(id)
+    _refresh_timeline()
+    _seek(current_time)
+    var notices: Array = result.get("warnings", [])
+    var issue_info := (" / 注意: " + str(notices[0])) if not notices.is_empty() else ""
+    _show_message("BB読込: %dキューブ・%dモーション%s" % [int(result["cubes"]), clips.size(), issue_info])
+    return true
+
+func _cycle_bb_animation() -> void:
+    if not bb_assets.has(selected_id):
+        _show_message("先にBBモデルを選択してください")
+        return
+    var asset: Dictionary = bb_assets[selected_id]
+    var clips: Array = asset.get("clips", [])
+    if clips.is_empty():
+        _show_message("このモデルにモーションはありません")
+        return
+    asset["clip_index"] = (int(asset["clip_index"]) + 1) % (clips.size() + 1) - 1
+    bb_assets[selected_id] = asset
+    _refresh_motion_button()
+    _sample_bb_animations()
+
+func _refresh_motion_button() -> void:
+    if motion_button == null:
+        return
+    motion_button.text = "モーション：なし ▷"
+    if not bb_assets.has(selected_id):
+        return
+    var asset: Dictionary = bb_assets[selected_id]
+    var clips: Array = asset.get("clips", [])
+    var selected := int(asset.get("clip_index", -1))
+    if selected >= 0 and selected < clips.size():
+        motion_button.text = "モーション：%s ▷" % str(clips[selected].get("name", "Animation"))
+
+func _sample_bb_animations() -> void:
+    var sampler := BBModelImporter.new()
+    for id_value in bb_assets.keys():
+        var asset: Dictionary = bb_assets[id_value]
+        var clips: Array = asset.get("clips", [])
+        var index := int(asset.get("clip_index", -1))
+        if index < 0 or index >= clips.size():
+            sampler.apply_clip(asset["groups"], {}, 0.0, bool(asset["old_format"]))
+            continue
+        var clip: Dictionary = clips[index]
+        var clip_length := maxf(0.01, float(clip.get("length", 0.01)))
+        var anim_time := fposmod(current_time, clip_length) if str(clip.get("loop", "")) == "loop" else minf(current_time, clip_length)
+        sampler.apply_clip(asset["groups"], clip, anim_time, bool(asset["old_format"]))
 
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
@@ -375,8 +497,7 @@ func _world_on_level(local: Vector2, height: float, fallback: Vector3) -> Vector
     return fallback
 
 func _hit_object_id(local: Vector2) -> String:
-    # Ray/AABB selection in object-local coordinates; no physics server needed.
-    # This remains reliable in offscreen SubViewports and headless tests.
+    # Recursive mesh ray cast; supports imported nested cuboids.
     var screen_pos := _viewport_position(local)
     var ray_origin := editor_camera.project_ray_origin(screen_pos)
     var ray_dir := editor_camera.project_ray_normal(screen_pos)
@@ -384,20 +505,25 @@ func _hit_object_id(local: Vector2) -> String:
     var closest_distance := INF
     for id_value in objects_by_id.keys():
         var id := str(id_value)
-        var node: Node3D = objects_by_id[id]
-        var mesh: MeshInstance3D = node.get_node_or_null("EditableMesh") as MeshInstance3D
-        if mesh == null:
-            continue
-        var transform_inv := mesh.global_transform.affine_inverse()
-        var local_origin: Vector3 = transform_inv * ray_origin
-        var local_direction: Vector3 = transform_inv.basis * ray_dir
-        var intersection: Variant = mesh.get_aabb().intersects_ray(local_origin, local_direction)
-        if intersection is Vector3:
-            var world_hit: Vector3 = mesh.global_transform * (intersection as Vector3)
-            var distance: float = ray_origin.distance_to(world_hit)
-            if distance < closest_distance:
-                closest_distance = distance
-                closest_id = id
+        var root_node: Node3D = objects_by_id[id]
+        var stack: Array[Node] = [root_node]
+        while not stack.is_empty():
+            var item: Node = stack.pop_back()
+            if item is MeshInstance3D and item.is_visible_in_tree() and item.name != "SelectionFrame":
+                var mesh: MeshInstance3D = item
+                if mesh.mesh != null:
+                    var transform_inv := mesh.global_transform.affine_inverse()
+                    var local_origin: Vector3 = transform_inv * ray_origin
+                    var local_direction: Vector3 = transform_inv.basis * ray_dir
+                    var intersection: Variant = mesh.get_aabb().intersects_ray(local_origin, local_direction)
+                    if intersection is Vector3:
+                        var world_hit: Vector3 = mesh.global_transform * (intersection as Vector3)
+                        var distance: float = ray_origin.distance_to(world_hit)
+                        if distance < closest_distance:
+                            closest_distance = distance
+                            closest_id = id
+            for child in item.get_children():
+                stack.append(child)
     return closest_id
 
 func _pick_object(screen_position: Vector2) -> void:
@@ -498,6 +624,7 @@ func _set_selection(id: String) -> void:
         var frame: Node3D = object_node.get_node_or_null("SelectionFrame")
         if frame != null:
             frame.visible = str(object_id) == selected_id
+    _refresh_motion_button()
     _show_message("選択中: %s" % (objects_by_id[id] as Node3D).name)
 
 func _refresh_selector() -> void:
@@ -704,6 +831,7 @@ func _sample_all() -> void:
             lerp_angle(deg_to_rad(start_rot.x), deg_to_rad(end_rot.x), weight),
             lerp_angle(deg_to_rad(start_rot.y), deg_to_rad(end_rot.y), weight),
             lerp_angle(deg_to_rad(start_rot.z), deg_to_rad(end_rot.z), weight))
+    _sample_bb_animations()
 
 func _array_to_vec(data: Variant) -> Vector3:
     if data is Array and data.size() >= 3:
@@ -746,7 +874,9 @@ func _serialize_project() -> Dictionary:
             "id": id,
             "kind": str(node.get_meta("kind", "box")),
             "tint": str(node.get_meta("tint", "#ffffff")),
-            "keyframes": tracks.get(id, [])
+            "keyframes": tracks.get(id, []),
+            "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
+            "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
     return {"version": 1, "duration": DURATION, "objects": records}
 
@@ -778,6 +908,7 @@ func _load_project() -> void:
         (node as Node3D).queue_free()
     objects_by_id.clear()
     tracks.clear()
+    bb_assets.clear()
     selected_id = ""
     next_id = 1
     var records: Array = parsed["objects"]
@@ -790,7 +921,7 @@ func _load_project() -> void:
             continue
         next_id = maxi(next_id, int(id) + 1)
         var kind := str(record.get("kind", "box"))
-        if kind != "sphere":
+        if kind != "sphere" and kind != "bbmodel":
             kind = "box"
         var raw_keys: Array = record.get("keyframes", [])
         var keys: Array = []
@@ -806,7 +937,30 @@ func _load_project() -> void:
             pos = _array_to_vec(keys[0]["position"])
             angles = _array_to_vec(keys[0]["rotation"])
         tracks[id] = keys
-        _create_object(id, kind, pos, angles, str(record.get("tint", "#ffffff")))
+        if kind == "bbmodel":
+            var source := str(record.get("bb_source", ""))
+            var importer := BBModelImporter.new()
+            var bb_result: Dictionary = importer.import_text(source)
+            if not bool(bb_result.get("ok", false)):
+                _show_message("保存したBBモデルの復元に失敗しました")
+                tracks.erase(id)
+                continue
+            var model: Node3D = bb_result["root"]
+            model.position = pos
+            model.rotation_degrees = angles
+            model.set_meta("movie_id", id)
+            model.set_meta("kind", "bbmodel")
+            model.set_meta("tint", "#ffffff")
+            scene_root.add_child(model)
+            objects_by_id[id] = model
+            var clips: Array = bb_result.get("animations", [])
+            bb_assets[id] = {
+                "source": source, "groups": bb_result["groups"], "clips": clips,
+                "clip_index": clampi(int(record.get("bb_clip_index", -1)), -1, clips.size() - 1),
+                "old_format": int(str(model.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
+            }
+        else:
+            _create_object(id, kind, pos, angles, str(record.get("tint", "#ffffff")))
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
