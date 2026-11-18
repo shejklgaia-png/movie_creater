@@ -890,6 +890,8 @@ func _update_camera() -> void:
         cos(orbit_yaw) * cos(orbit_pitch))
     editor_camera.position = orbit_target + direction * orbit_distance
     editor_camera.look_at(orbit_target, Vector3.UP)
+    # Refresh size/orientation when zooming and orbiting while paused.
+    _update_gizmo()
 
 func _capture_camera_key(at: float) -> Dictionary:
     return {
@@ -1047,7 +1049,8 @@ func _begin_pointer(at: Vector2) -> void:
         drag_rotation_start = drag_target_node.rotation_degrees
         drag_initial_scale = drag_target_node.scale
         drag_existing_offset = _get_part_offset(drag_target_id, drag_part_path)
-        drag_grab_point = _world_on_level(at, drag_target_node.global_position.y, drag_target_node.global_position)
+        var anchor := _gizmo_anchor_world(drag_target_node)
+        drag_grab_point = _world_on_level(at, anchor.y, anchor)
 
 func _move_pointer(at: Vector2) -> void:
     if not pointer_active:
@@ -1095,6 +1098,7 @@ func _apply_model_drag(at: Vector2) -> void:
         var rotate_axis: int = 1 if axis == 0 else axis - 1
         angle[rotate_axis] += (at.x - pointer_origin.x) * 0.55
         node.rotation_degrees = angle
+        _update_gizmo()
         return
     if mode_index == 2:
         var factor := clampf(exp((pointer_origin.y - at.y) * 0.009), 0.05, 20.0)
@@ -1104,25 +1108,36 @@ func _apply_model_drag(at: Vector2) -> void:
         else:
             scale_value[axis - 1] *= factor
         node.scale = scale_value
+        _update_gizmo()
         return
+
     var position := drag_position_start
-    if axis == 2:
-        var height_scale: float = 2.0 * orbit_distance * tan(deg_to_rad(editor_camera.fov) * 0.5) / maxf(preview_box.size.y, 1.0)
-        var world_delta := Vector3.UP * (pointer_origin.y - at.y) * height_scale
-        var parent: Node3D = node.get_parent_node_3d()
-        var local_delta := parent.global_basis.inverse() * world_delta if parent != null else world_delta
-        position += local_delta
+    if axis > 0:
+        # Use the actual 2D projection of the rotated part's LOCAL axis.
+        # Previously gizmo's line pointed in one direction but parent-local
+        # translation took the element in another direction.
+        var pivot: Vector3 = _gizmo_anchor_world(node)
+        var basis: Basis = node.global_basis.orthonormalized()
+        var axis_vectors := [Vector3.RIGHT, Vector3.UP, Vector3.BACK]
+        var world_axis: Vector3 = basis * axis_vectors[axis - 1]
+        var p0: Vector2 = editor_camera.unproject_position(pivot)
+        var p1: Vector2 = editor_camera.unproject_position(pivot + world_axis)
+        var on_screen: Vector2 = p1 - p0
+        if on_screen.length_squared() > 0.00001:
+            var cursor_delta: Vector2 = _viewport_position(at) - _viewport_position(pointer_origin)
+            var world_distance: float = clampf(cursor_delta.dot(on_screen) / on_screen.length_squared(), -100.0, 100.0)
+            var world_delta: Vector3 = world_axis * world_distance
+            var parent: Node3D = node.get_parent_node_3d()
+            position += parent.global_basis.inverse() * world_delta if parent != null else world_delta
     else:
         var hit := _world_on_level(at, drag_grab_point.y, drag_grab_point)
         var world_delta: Vector3 = hit - drag_grab_point
         var parent: Node3D = node.get_parent_node_3d()
         var local_delta: Vector3 = parent.global_basis.inverse() * world_delta if parent != null else world_delta
-        if axis == 0 or axis == 1:
-            position.x += local_delta.x
-        if axis == 0 or axis == 3:
-            position.z += local_delta.z
+        position.x += local_delta.x
+        position.z += local_delta.z
     node.position = position
-
+    _update_gizmo()
 
 func _two_finger_camera(changed_index: int, old_position: Vector2, new_position: Vector2) -> void:
     var indices: Array = touches.keys()
