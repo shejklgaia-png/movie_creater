@@ -10,7 +10,7 @@ const PoseTrack = preload("res://scripts/pose_track.gd")
 const SAVE_PATH := "user://movie_project.json"
 const BACKUP_PATH := "user://movie_project.backup.json"
 const TEMP_PATH := "user://movie_project.tmp.json"
-const DURATION := 15.0
+var DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
 
 var scene_root: Node3D
@@ -51,6 +51,8 @@ var project_file_dialog: FileDialog
 var file_menu: PopupPanel
 var confirm_new: ConfirmationDialog
 var confirm_delete: ConfirmationDialog
+var duration_dialog: ConfirmationDialog
+var duration_input: SpinBox
 var autosave_timer: Timer
 var is_project_loading := false
 var tl_zoom_buttons: Array[Button] = []
@@ -331,6 +333,7 @@ func _build_file_menu() -> void:
         {"title":"📂 保存済みを開く", "action":_load_project},
         {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
         {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
+        {"title":"⏱ ムービーの長さ", "action":_show_duration_dialog},
         {"title":"＋ 新しいムービー", "action":_confirm_new_project},
         {"title":"🗑 選択モデルを削除", "action":_confirm_delete_model}
     ]:
@@ -350,9 +353,33 @@ func _build_file_menu() -> void:
     confirm_delete.dialog_text = "選択中のモデルを削除します。続けますか？"
     confirm_delete.confirmed.connect(_delete_selected_model)
     add_child(confirm_delete)
+    duration_dialog = ConfirmationDialog.new()
+    duration_dialog.title = "ムービーの長さ（秒）"
+    duration_dialog.dialog_text = "時間軸の長さを設定してください（1～600秒）。"
+    duration_input = SpinBox.new()
+    duration_input.min_value = 1.0
+    duration_input.max_value = 600.0
+    duration_input.step = 1.0
+    duration_input.custom_minimum_size = Vector2(230, 48)
+    duration_dialog.add_child(duration_input)
+    duration_dialog.confirmed.connect(func(): _set_project_duration(duration_input.value))
+    add_child(duration_dialog)
 
 func _open_file_menu() -> void:
     file_menu.popup_centered(Vector2i(290, 364))
+
+func _show_duration_dialog() -> void:
+    duration_input.set_value_no_signal(DURATION)
+    duration_dialog.popup_centered(Vector2i(310, 200))
+
+func _set_project_duration(seconds: float) -> void:
+    DURATION = clampf(seconds, 1.0, 600.0)
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
+    timeline.zoom_to(timeline.zoom, minf(current_time, DURATION))
+    _seek(minf(current_time, DURATION))
+    _mark_dirty()
+    _show_message("尺を%.0f秒に変更しました" % DURATION)
 
 func _confirm_new_project() -> void:
     confirm_new.popup_centered()
@@ -380,6 +407,11 @@ func _new_project() -> void:
     redo_stack.clear()
     next_id = 1
     next_clip_id = 1
+    DURATION = 15.0
+    timeline.zoom = 1.0
+    timeline.view_start = 0.0
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
     selected_id = ""
     selected_part_path = ""
     selected_part_model = ""
@@ -2467,6 +2499,11 @@ func _load_project() -> void:
         _show_message("保存形式が不正です。バックアップを保持しています")
         return
     is_project_loading = true
+    DURATION = clampf(float(parsed.get("duration", 15.0)), 1.0, 600.0)
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
+    timeline.zoom = 1.0
+    timeline.view_start = 0.0
     for node in objects_by_id.values():
         (node as Node3D).queue_free()
     objects_by_id.clear()
