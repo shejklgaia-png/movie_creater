@@ -1245,6 +1245,9 @@ func _add_selection_frame(node: Node3D, kind: String) -> void:
     node.add_child(frame)
 
 func _set_selection(id: String) -> void:
+    if selected_id != id:
+        selected_part_path = ""
+        selected_part_model = ""
     if id == "__camera__":
         selected_id = id
         selection.text = "撮影カメラ ▾"
@@ -1260,6 +1263,7 @@ func _set_selection(id: String) -> void:
             # A huge bounding wireframe obstructed imported character models.
             frame.visible = str(object_id) == selected_id and str(object_node.get_meta("kind", "")) != "bbmodel"
     _refresh_motion_button()
+    _update_gizmo()
     _show_message("選択中: %s" % ("撮影カメラ" if id == "__camera__" else _model_title(id)))
 
 func _refresh_selector() -> void:
@@ -1275,12 +1279,174 @@ func _refresh_selector() -> void:
         selection.text = "モデル選択 ▾"
 
 func _cycle_mode() -> void:
-    mode_index = (mode_index + 1) % 2
-    mode_option.text = ("移動" if mode_index == 0 else "回転")
+    _set_transform_mode((mode_index + 1) % 3)
+
+func _get_selected_target() -> Node3D:
+    if selected_id == "__camera__":
+        return shot_camera
+    if not objects_by_id.has(selected_id):
+        return null
+    var root_node: Node3D = objects_by_id[selected_id]
+    if selected_part_model == selected_id and not selected_part_path.is_empty():
+        var part: Node3D = root_node.get_node_or_null(NodePath(selected_part_path)) as Node3D
+        if part != null:
+            return part
+    return root_node
+
+func _set_part_selection(model_id: String, path: String) -> void:
+    if not objects_by_id.has(model_id):
+        return
+    selected_id = model_id
+    selected_part_model = model_id
+    selected_part_path = path
+    _set_selection(model_id)
+    _update_gizmo()
+    var target := _get_selected_target()
+    if target != null:
+        _show_message("要素: %s" % _short_text(target.name, 28))
+
+func _update_gizmo() -> void:
+    if gizmo == null or editor_camera == null:
+        return
+    var target := _get_selected_target()
+    gizmo.visible = target != null and mode_index != 3 and not shot_preview
+    if target == null:
+        part_label.text = "対象: なし"
+        return
+    var label := target.name
+    if selected_part_model != selected_id or selected_part_path.is_empty():
+        label = "撮影カメラ" if selected_id == "__camera__" else _model_title(selected_id)
+    part_label.text = "対象: %s" % _short_text(label, 11)
+    gizmo.global_position = target.global_position
+    var distance := editor_camera.global_position.distance_to(target.global_position)
+    gizmo.scale = Vector3.ONE * clampf(distance * 0.085, 0.15, 6.0)
+    gizmo.set_mode(mode_index) if gizmo.mode != mode_index else null
+
+func _set_transform_mode(tool: int) -> void:
+    mode_index = tool
+    for index in range(transform_buttons.size()):
+        var button: Button = transform_buttons[index]
+        var button_mode := [3, 0, 1, 2][index]
+        button.modulate = Color("#8ecaff") if button_mode == mode_index else Color.WHITE
+    _update_gizmo()
+
+func _open_part_picker() -> void:
+    if not objects_by_id.has(selected_id):
+        _show_message("先にモデルを選択してください")
+        return
+    picker_mode = "part"
+    picker_title.text = "階層・パーツを選択"
+    for child in picker_list.get_children():
+        picker_list.remove_child(child)
+        child.queue_free()
+    var full_button := Button.new()
+    full_button.text = "◉ モデル全体"
+    full_button.custom_minimum_size.y = 52
+    full_button.pressed.connect(_choose_part.bind(selected_id, ""))
+    picker_list.add_child(full_button)
+    var model: Node3D = objects_by_id[selected_id]
+    _fill_part_picker(model, model, 0)
+    picker_overlay.show()
+
+func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
+    if depth > 15:
+        return
+    for child in current.get_children():
+        if not (child is Node3D) or child.name in ["SelectionFrame", "EditableMesh", "BBFaceMesh", "ShotCameraMarker", "TransformGizmo"]:
+            continue
+        if child is StaticBody3D:
+            continue
+        var part: Node3D = child
+        var path := str(root_node.get_path_to(part))
+        var button := Button.new()
+        button.text = ("  ".repeat(mini(depth, 6))) + _short_text(part.name, 23)
+        button.custom_minimum_size.y = 46
+        button.clip_text = true
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        button.pressed.connect(_choose_part.bind(selected_id, path))
+        picker_list.add_child(button)
+        _fill_part_picker(root_node, child, depth + 1)
+
+func _choose_part(model_id: String, path: String) -> void:
+    _close_picker()
+    _set_part_selection(model_id, path)
+
+func _get_part_offset(model_id: String, path: String) -> Dictionary:
+    var per_model: Dictionary = element_offsets.get(model_id, {})
+    if per_model.has(path):
+        return (per_model[path] as Dictionary).duplicate(true)
+    return {"position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}
+
+func _apply_element_offsets() -> void:
+    for id_value in element_offsets.keys():
+        var model_id := str(id_value)
+        if not objects_by_id.has(model_id):
+            continue
+        var root_node: Node3D = objects_by_id[model_id]
+        var offsets: Dictionary = element_offsets[model_id]
+        for path_value in offsets.keys():
+            var path := str(path_value)
+            var node: Node3D = root_node.get_node_or_null(NodePath(path)) as Node3D
+            if node == null:
+                continue
+            var offset: Dictionary = offsets[path]
+            node.position += _array_to_vec(offset.get("position", [0, 0, 0]))
+            node.rotation_degrees += _array_to_vec(offset.get("rotation", [0, 0, 0]))
+            var scale_value := _array_to_vec(offset.get("scale", [1, 1, 1]))
+            node.scale *= scale_value
+
+func _commit_part_edit(node: Node3D, start_position: Vector3, start_rotation: Vector3, start_scale: Vector3, previous: Dictionary) -> void:
+    if selected_part_model != selected_id or selected_part_path.is_empty():
+        return
+    var original_pos := _array_to_vec(previous.get("position", [0, 0, 0]))
+    var original_rot := _array_to_vec(previous.get("rotation", [0, 0, 0]))
+    var original_scale := _array_to_vec(previous.get("scale", [1, 1, 1]))
+    var safe_scale := Vector3(
+        maxf(absf(start_scale.x), 0.0001),
+        maxf(absf(start_scale.y), 0.0001),
+        maxf(absf(start_scale.z), 0.0001))
+    var new_offset := {
+        "position": _vec_array(original_pos + node.position - start_position),
+        "rotation": _vec_array(original_rot + node.rotation_degrees - start_rotation),
+        "scale": _vec_array(original_scale * Vector3(
+            node.scale.x / safe_scale.x,
+            node.scale.y / safe_scale.y,
+            node.scale.z / safe_scale.z))
+    }
+    var offsets: Dictionary = element_offsets.get(selected_id, {})
+    offsets[selected_part_path] = new_offset
+    element_offsets[selected_id] = offsets
+    _seek(current_time)
+    _update_gizmo()
+
+func _vec_array(vec: Vector3) -> Array:
+    return [vec.x, vec.y, vec.z]
+
+func _reset_selected_transform() -> void:
+    var target := _get_selected_target()
+    if target == null:
+        return
+    _set_playing(false)
+    if selected_part_model == selected_id and not selected_part_path.is_empty():
+        var per_model: Dictionary = element_offsets.get(selected_id, {})
+        per_model.erase(selected_part_path)
+        element_offsets[selected_id] = per_model
+        _seek(current_time)
+    elif selected_id == "__camera__":
+        shot_camera.transform = editor_camera.transform
+        _insert_camera_key()
+    else:
+        target.position = Vector3.ZERO
+        target.rotation_degrees = Vector3.ZERO
+        target.scale = Vector3.ONE
+        _insert_key()
+    _update_gizmo()
+    _show_message("選択対象の調整をリセットしました")
 
 func _cycle_axis() -> void:
     axis_index = (axis_index + 1) % 4
     axis_option.text = ["自由", "X", "Y", "Z"][axis_index]
+    _update_gizmo()
 
 func _build_picker() -> void:
     # A native OptionButton PopupMenu is hard to dismiss on Android.
@@ -1490,7 +1656,9 @@ func _sample_all() -> void:
             lerp_angle(deg_to_rad(start_rot.y), deg_to_rad(end_rot.y), weight),
             lerp_angle(deg_to_rad(start_rot.z), deg_to_rad(end_rot.z), weight))
     _sample_bb_animations()
+    _apply_element_offsets()
     _sample_camera()
+    _update_gizmo()
 
 func _array_to_vec(data: Variant) -> Vector3:
     if data is Array and data.size() >= 3:
