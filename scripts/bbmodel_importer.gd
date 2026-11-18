@@ -166,7 +166,10 @@ func _build_outliner(entry: Variant, parent: Node3D, parent_origin: Vector3) -> 
     var origin := _to_vec(group.get("origin", [0, 0, 0]))
     var node := Node3D.new()
     node.name = str(group.get("name", "Group")).validate_node_name()
-    node.rotation_order = EULER_ORDER_XYZ
+    # Blockbench/three.js bones use intrinsic ZYX Euler order (Rx, then Ry, then Rz).
+    # Cuboid and free-mesh ELEMENT rotations use XYZ, and stay unchanged.
+    # XYZ on multi-axis animated bones displaced legs and feet dramatically.
+    node.rotation_order = EULER_ORDER_ZYX
     node.position = (origin - parent_origin) * UNIT
     node.rotation_degrees = _to_vec(group.get("rotation", [0, 0, 0]))
     node.visible = bool(group.get("visibility", true))
