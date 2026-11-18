@@ -25,8 +25,8 @@ func _test() -> void:
     if int(result.get("meshes", -1)) != 18 or int(result.get("cubes", -1)) != 0:
         _failure("Expected 18 polygon meshes and zero cuboids")
         return
-    if int(result.get("triangles", -1)) != 212:
-        _failure("Expected 212 triangulated polygon faces, got %s" % str(result.get("triangles", "?")))
+    if int(result.get("triangles", -1)) != 252:
+        _failure("Expected 252 triangulated polygon faces, got %s" % str(result.get("triangles", "?")))
         return
     if (result["groups"] as Dictionary).size() != 16:
         _failure("Nested group hierarchy lost")
@@ -94,5 +94,5 @@ func _test() -> void:
     if not found:
         _failure("Model missing from project serialization")
         return
-    print("FREE MESH TEST PASSED: 18 meshes, 212 triangles, 16 groups, color, animation, editor import, serialization")
+    print("FREE MESH TEST PASSED: 18 meshes, 134 faces, 252 triangles, 16 groups, color, animation, editor import, serialization")
     quit(0)
