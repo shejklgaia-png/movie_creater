@@ -56,6 +56,7 @@ var selected_part_path := ""
 var selected_part_model := ""
 var last_hit_part_path := ""
 var element_offsets: Dictionary = {}
+var static_element_rest: Dictionary = {}
 var drag_part_path := ""
 var drag_target_node: Node3D
 var drag_initial_scale := Vector3.ONE
@@ -361,6 +362,7 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
         "clip_index": 0 if not clips.is_empty() else -1,
         "old_format": int(str(node.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
     }
+    _capture_static_element_rest(id)
     _refresh_selector()
     _set_selection(id)
     var imported_clips: Array = result.get("animations", [])
@@ -1025,7 +1027,7 @@ func _begin_pointer(at: Vector2) -> void:
         drag_target_id = _hit_object_id(at)
         if not drag_target_id.is_empty():
             _set_selection(drag_target_id)
-            if not last_hit_part_path.is_empty() and bb_assets.has(drag_target_id):
+            if bb_assets.has(drag_target_id):
                 _set_part_selection(drag_target_id, last_hit_part_path)
                 drag_part_path = selected_part_path
     if not drag_target_id.is_empty():
@@ -1416,7 +1418,50 @@ func _get_part_offset(model_id: String, path: String) -> Dictionary:
         return (per_model[path] as Dictionary).duplicate(true)
     return {"position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}
 
+func _capture_static_element_rest(model_id: String) -> void:
+    if not bb_assets.has(model_id) or not objects_by_id.has(model_id):
+        return
+    var root_node: Node3D = objects_by_id[model_id]
+    var groups: Dictionary = bb_assets[model_id]["groups"]
+    var animated_nodes: Array[Node] = []
+    for group_data in groups.values():
+        if group_data is Dictionary:
+            animated_nodes.append(group_data["node"])
+    var baseline: Dictionary = {}
+    var stack: Array[Node] = [root_node]
+    while not stack.is_empty():
+        var item: Node = stack.pop_back()
+        if item is Node3D and item != root_node and not animated_nodes.has(item):
+            if item.name not in ["BBFaceMesh", "SelectionFrame"]:
+                var part: Node3D = item
+                baseline[str(root_node.get_path_to(part))] = {
+                    "position": _vec_array(part.position),
+                    "rotation": _vec_array(part.rotation_degrees),
+                    "scale": _vec_array(part.scale)
+                }
+        for child in item.get_children():
+            stack.append(child)
+    static_element_rest[model_id] = baseline
+
+func _reset_static_elements() -> void:
+    for model_id_value in static_element_rest.keys():
+        var model_id := str(model_id_value)
+        if not objects_by_id.has(model_id):
+            continue
+        var root_node: Node3D = objects_by_id[model_id]
+        var records: Dictionary = static_element_rest[model_id]
+        for path_value in records.keys():
+            var path := str(path_value)
+            var part: Node3D = root_node.get_node_or_null(NodePath(path)) as Node3D
+            if part == null:
+                continue
+            var baseline: Dictionary = records[path]
+            part.position = _array_to_vec(baseline.get("position", [0, 0, 0]))
+            part.rotation_degrees = _array_to_vec(baseline.get("rotation", [0, 0, 0]))
+            part.scale = _array_to_vec(baseline.get("scale", [1, 1, 1]))
+
 func _apply_element_offsets() -> void:
+    _reset_static_elements()
     for id_value in element_offsets.keys():
         var model_id := str(id_value)
         if not objects_by_id.has(model_id):
@@ -1602,7 +1647,8 @@ func _capture_key(node: Node3D, at: float) -> Dictionary:
     return {
         "time": snappedf(at, 0.01),
         "position": [node.position.x, node.position.y, node.position.z],
-        "rotation": [node.rotation_degrees.x, node.rotation_degrees.y, node.rotation_degrees.z]
+        "rotation": [node.rotation_degrees.x, node.rotation_degrees.y, node.rotation_degrees.z],
+        "scale": [node.scale.x, node.scale.y, node.scale.z]
     }
 
 func _insert_key() -> void:
@@ -1694,6 +1740,8 @@ func _sample_all() -> void:
             lerp_angle(deg_to_rad(start_rot.x), deg_to_rad(end_rot.x), weight),
             lerp_angle(deg_to_rad(start_rot.y), deg_to_rad(end_rot.y), weight),
             lerp_angle(deg_to_rad(start_rot.z), deg_to_rad(end_rot.z), weight))
+        node.scale = _array_to_vec(before.get("scale", [1, 1, 1])).lerp(
+            _array_to_vec(after.get("scale", [1, 1, 1])), weight)
     _sample_bb_animations()
     _apply_element_offsets()
     _sample_camera()
@@ -1762,10 +1810,11 @@ func _serialize_project() -> Dictionary:
             "display_name": node.name,
             "keyframes": tracks.get(id, []),
             "animation_clips": clip_tracks.get(id, []),
+            "element_offsets": element_offsets.get(id, {}).duplicate(true),
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 2, "duration": DURATION,
+    return {"version": 3, "duration": DURATION,
         "camera_keys": camera_keys.duplicate(true), "objects": records}
 
 func _save_project() -> void:
@@ -1789,7 +1838,7 @@ func _load_project() -> void:
         return
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2] or not (parsed.get("objects") is Array):
+    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3] or not (parsed.get("objects") is Array):
         _show_message("未対応のプロジェクト形式です")
         return
     for node in objects_by_id.values():
@@ -1798,6 +1847,10 @@ func _load_project() -> void:
     tracks.clear()
     bb_assets.clear()
     clip_tracks.clear()
+    element_offsets.clear()
+    static_element_rest.clear()
+    selected_part_model = ""
+    selected_part_path = ""
     next_clip_id = 1
     selected_id = ""
     next_id = 1
@@ -1851,6 +1904,8 @@ func _load_project() -> void:
                 "clip_index": clampi(int(record.get("bb_clip_index", -1)), -1, clips.size() - 1),
                 "old_format": int(str(model.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
             }
+            _capture_static_element_rest(id)
+            element_offsets[id] = (record.get("element_offsets", {}) as Dictionary).duplicate(true)
             var restored: Array = []
             for clip_value in record.get("animation_clips", []):
                 if not (clip_value is Dictionary):
