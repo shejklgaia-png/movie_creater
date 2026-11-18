@@ -8,6 +8,8 @@ const ClipEngine = preload("res://scripts/clip_engine.gd")
 const TransformGizmo = preload("res://scripts/transform_gizmo.gd")
 const PoseTrack = preload("res://scripts/pose_track.gd")
 const SAVE_PATH := "user://movie_project.json"
+const BACKUP_PATH := "user://movie_project.backup.json"
+const TEMP_PATH := "user://movie_project.tmp.json"
 const DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
 
@@ -45,6 +47,14 @@ var pose_record_mode := false
 # model_id -> (relative NodePath -> timeline pose keys)
 var part_pose_tracks: Dictionary = {}
 var bb_file_dialog: FileDialog
+var project_file_dialog: FileDialog
+var file_menu: PopupPanel
+var confirm_new: ConfirmationDialog
+var confirm_delete: ConfirmationDialog
+var autosave_timer: Timer
+var is_project_loading := false
+var tl_zoom_buttons: Array[Button] = []
+var tl_zoom_label: Label
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
@@ -128,15 +138,14 @@ func _build_interface() -> void:
     header.custom_minimum_size.y = 54
     layout.add_child(header)
     var app_title := Label.new()
-    app_title.text = "MOVIE CREATOR"
+    app_title.text = "MOVIE"
     app_title.add_theme_font_size_override("font_size", 19)
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
-    _make_button(header, "↶", _undo_part_edit).tooltip_text = "部位編集を元に戻す"
-    _make_button(header, "↷", _redo_part_edit).tooltip_text = "部位編集をやり直す"
-    _make_button(header, "保存", _save_project)
-    _make_button(header, "読込", _load_project)
+    _make_button(header, "↶", _undo_part_edit).tooltip_text = "関節編集のみ取り消し"
+    _make_button(header, "↷", _redo_part_edit).tooltip_text = "関節編集のみやり直し"
+    _make_button(header, "ファイル", _open_file_menu)
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -181,14 +190,15 @@ func _build_interface() -> void:
         if int(tool["mode"]) == 0:
             mode_option = mode_button
     part_label = Label.new()
-    part_label.anchor_top = 1.0
-    part_label.anchor_bottom = 1.0
+    # The name has its own upper-left lane, never sharing the right toolbar.
+    part_label.anchor_top = 0.0
+    part_label.anchor_bottom = 0.0
     part_label.anchor_left = 0.0
     part_label.anchor_right = 0.0
-    part_label.offset_left = 7.0
-    part_label.offset_right = 176.0
-    part_label.offset_top = -52.0
-    part_label.offset_bottom = -6.0
+    part_label.offset_left = 8.0
+    part_label.offset_right = 186.0
+    part_label.offset_top = 7.0
+    part_label.offset_bottom = 48.0
     part_label.clip_text = true
     part_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     part_label.add_theme_font_size_override("font_size", 12)
@@ -214,9 +224,11 @@ func _build_interface() -> void:
     time_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     time_slider.value_changed.connect(_seek)
     playback.add_child(time_slider)
+    _make_button(playback, "－", func(): _change_timeline_zoom(-1))
+    _make_button(playback, "＋", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
-    timeline_scroll.custom_minimum_size = Vector2(0, 164)
+    timeline_scroll.custom_minimum_size = Vector2(0, 152)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     dock.add_child(timeline_scroll)
@@ -227,6 +239,7 @@ func _build_interface() -> void:
     timeline.key_dragged.connect(_on_key_dragged)
     timeline.clip_tapped.connect(_open_clip_editor)
     timeline.clip_dragged.connect(_on_clip_dragged)
+    timeline.vertical_pan_requested.connect(_timeline_vertical_pan)
 
     var add_row := HBoxContainer.new()
     dock.add_child(add_row)
@@ -266,18 +279,16 @@ func _build_interface() -> void:
 
     var nudge_row := HBoxContainer.new()
     dock.add_child(nudge_row)
-    _make_button(nudge_row, "－", func(): _nudge(-1.0))
-    var nudge_hint := Label.new()
-    nudge_hint.text = "微調整"
-    nudge_hint.clip_text = true
-    nudge_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    nudge_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    nudge_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    nudge_row.add_child(nudge_hint)
-    _make_button(nudge_row, "＋", func(): _nudge(1.0))
-    _make_button(nudge_row, "注視", _focus_selected)
-    _make_button(nudge_row, "戻す", _reset_selected_transform)
-    _make_button(nudge_row, "数値", _open_transform_inspector)
+    for action in [
+        {"text":"－", "call":func(): _nudge(-1.0)},
+        {"text":"＋", "call":func(): _nudge(1.0)},
+        {"text":"注視", "call":_focus_selected},
+        {"text":"戻す", "call":_reset_selected_transform},
+        {"text":"数値", "call":_open_transform_inspector}
+    ]:
+        var button := _make_button(nudge_row, str(action["text"]), action["call"])
+        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        button.custom_minimum_size.x = 0
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -289,6 +300,12 @@ func _build_interface() -> void:
     _build_picker()
     _build_clip_editor()
     _build_transform_inspector()
+    _build_file_menu()
+    autosave_timer = Timer.new()
+    autosave_timer.one_shot = true
+    autosave_timer.wait_time = 20.0
+    autosave_timer.timeout.connect(_autosave_project)
+    add_child(autosave_timer)
 
 func _choose_bbmodel() -> void:
     _set_playing(false)
@@ -815,7 +832,8 @@ func _close_clip_editor() -> void:
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
     button.text = title
-    button.custom_minimum_size = Vector2(52, 48)
+    button.custom_minimum_size = Vector2(48, 48)
+    button.clip_text = true
     button.pressed.connect(action)
     parent.add_child(button)
     return button
@@ -1446,7 +1464,7 @@ func _open_part_picker() -> void:
     picker_overlay.show()
 
 func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
-    if depth > 15:
+    if depth > 96:
         return
     for child in current.get_children():
         if not (child is Node3D) or child.name in ["SelectionFrame", "EditableMesh", "BBFaceMesh", "ShotCameraMarker", "TransformGizmo"]:
