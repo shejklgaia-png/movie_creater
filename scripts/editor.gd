@@ -16,6 +16,9 @@ var preview_box: SubViewportContainer
 var preview_panel: Control
 var part_label: Label
 var part_picker_button: Button
+var transform_overlay: Control
+var transform_field_controls: Dictionary = {}
+var transform_title: Label
 var transform_buttons: Array[Button] = []
 var gizmo: Node3D
 var editor_camera: Camera3D
@@ -264,6 +267,7 @@ func _build_interface() -> void:
     _make_button(nudge_row, "＋", func(): _nudge(1.0))
     _make_button(nudge_row, "注視", _focus_selected)
     _make_button(nudge_row, "戻す", _reset_selected_transform)
+    _make_button(nudge_row, "数値", _open_transform_inspector)
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -274,6 +278,7 @@ func _build_interface() -> void:
     dock.add_child(status_label)
     _build_picker()
     _build_clip_editor()
+    _build_transform_inspector()
 
 func _choose_bbmodel() -> void:
     _set_playing(false)
@@ -1529,6 +1534,124 @@ func _reset_selected_transform() -> void:
     _update_gizmo()
     _show_message("選択対象の調整をリセットしました")
 
+func _build_transform_inspector() -> void:
+    transform_overlay = Control.new()
+    transform_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    transform_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    add_child(transform_overlay)
+    var shade := ColorRect.new()
+    shade.color = Color(0.02, 0.04, 0.07, 0.82)
+    shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    transform_overlay.add_child(shade)
+    var outside := Button.new()
+    outside.flat = true
+    outside.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    outside.pressed.connect(_close_transform_inspector)
+    transform_overlay.add_child(outside)
+    var sheet := PanelContainer.new()
+    sheet.anchor_left = 0.04
+    sheet.anchor_right = 0.96
+    sheet.anchor_top = 0.30
+    sheet.anchor_bottom = 0.96
+    sheet.mouse_filter = Control.MOUSE_FILTER_STOP
+    transform_overlay.add_child(sheet)
+    var container := VBoxContainer.new()
+    container.add_theme_constant_override("separation", 8)
+    sheet.add_child(container)
+    var title_row := HBoxContainer.new()
+    container.add_child(title_row)
+    transform_title = Label.new()
+    transform_title.text = "要素の数値編集"
+    transform_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    transform_title.clip_text = true
+    title_row.add_child(transform_title)
+    _make_button(title_row, "閉じる", _close_transform_inspector)
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    container.add_child(scroll)
+    var fields := VBoxContainer.new()
+    fields.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    scroll.add_child(fields)
+    for group_data in [
+        {"key": "position", "title": "位置（m）", "step": 0.05},
+        {"key": "rotation", "title": "回転（°）", "step": 1.0},
+        {"key": "scale", "title": "拡縮（倍率）", "step": 0.05}
+    ]:
+        var label := Label.new()
+        label.text = str(group_data["title"])
+        fields.add_child(label)
+        var row := HBoxContainer.new()
+        fields.add_child(row)
+        for axis in range(3):
+            var caption := Label.new()
+            caption.text = ["X", "Y", "Z"][axis]
+            row.add_child(caption)
+            var field := SpinBox.new()
+            field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+            field.min_value = 0.01 if str(group_data["key"]) == "scale" else -10000.0
+            field.max_value = 100.0 if str(group_data["key"]) == "scale" else 10000.0
+            field.step = float(group_data["step"])
+            field.value_changed.connect(_set_numeric_transform.bind(str(group_data["key"]), axis))
+            row.add_child(field)
+            transform_field_controls["%s_%d" % [str(group_data["key"]), axis]] = field
+    _make_button(container, "選択要素をリセット", _reset_selected_transform)
+    transform_overlay.hide()
+
+func _open_transform_inspector() -> void:
+    var node := _get_selected_target()
+    if node == null:
+        _show_message("先に編集対象を選択してください")
+        return
+    _set_playing(false)
+    transform_title.text = "数値編集: %s" % _short_text(node.name, 17)
+    var values := {
+        "position": node.position,
+        "rotation": node.rotation_degrees,
+        "scale": node.scale
+    }
+    for key in values.keys():
+        var vector: Vector3 = values[key]
+        for axis in range(3):
+            var field: SpinBox = transform_field_controls["%s_%d" % [str(key), axis]]
+            field.set_value_no_signal(vector[axis])
+    transform_overlay.show()
+
+func _close_transform_inspector() -> void:
+    if transform_overlay != null:
+        transform_overlay.hide()
+
+func _set_numeric_transform(value: float, channel: String, axis: int) -> void:
+    var node := _get_selected_target()
+    if node == null:
+        return
+    var before_pos := node.position
+    var before_rot := node.rotation_degrees
+    var before_scale := node.scale
+    var previous := _get_part_offset(selected_id, selected_part_path)
+    match channel:
+        "position":
+            var next := node.position
+            next[axis] = value
+            node.position = next
+        "rotation":
+            var next := node.rotation_degrees
+            next[axis] = value
+            node.rotation_degrees = next
+        "scale":
+            var next := node.scale
+            next[axis] = maxf(0.01, value)
+            node.scale = next
+        _:
+            return
+    if selected_part_model == selected_id and not selected_part_path.is_empty():
+        _commit_part_edit(node, before_pos, before_rot, before_scale, previous)
+    elif selected_id == "__camera__":
+        _insert_camera_key()
+    else:
+        _insert_key()
+    _update_gizmo()
+
 func _cycle_axis() -> void:
     axis_index = (axis_index + 1) % 4
     axis_option.text = ["自由", "X", "Y", "Z"][axis_index]
@@ -1623,7 +1746,10 @@ func _close_picker() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
     if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-        if picker_overlay != null and picker_overlay.visible:
+        if transform_overlay != null and transform_overlay.visible:
+            _close_transform_inspector()
+            get_viewport().set_input_as_handled()
+        elif picker_overlay != null and picker_overlay.visible:
             _close_picker()
             get_viewport().set_input_as_handled()
 
