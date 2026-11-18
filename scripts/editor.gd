@@ -1466,11 +1466,108 @@ func _choose_part(model_id: String, path: String) -> void:
     _close_picker()
     _set_part_selection(model_id, path)
 
-func _get_part_offset(model_id: String, path: String) -> Dictionary:
+func _toggle_pose_record() -> void:
+    pose_record_mode = not pose_record_mode
+    pose_record_button.text = "◆ポーズON" if pose_record_mode else "◆ポーズOFF"
+    pose_record_button.modulate = Color("#ffda83") if pose_record_mode else Color.WHITE
+    if pose_record_mode:
+        _show_message("ポーズ記録ON：関節を動かすと現在時刻に◆を登録")
+    else:
+        _show_message("ポーズ記録OFF：全時刻共通の関節調整")
+
+func _pose_keys(model_id: String, part_path: String) -> Array:
+    var by_model: Dictionary = part_pose_tracks.get(model_id, {})
+    var keys: Variant = by_model.get(part_path, [])
+    return keys if keys is Array else []
+
+func _get_static_part_offset(model_id: String, path: String) -> Dictionary:
     var per_model: Dictionary = element_offsets.get(model_id, {})
     if per_model.has(path):
         return (per_model[path] as Dictionary).duplicate(true)
-    return {"position": [0.0, 0.0, 0.0], "rotation": [0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]}
+    return PoseTrack.identity()
+
+func _sample_pose(model_id: String, path: String, time: float) -> Dictionary:
+    return PoseTrack.sample(_pose_keys(model_id, path), time)
+
+func _read_part_history_state(model_id: String, part_path: String) -> Dictionary:
+    return {
+        "base": _get_static_part_offset(model_id, part_path),
+        "keys": _pose_keys(model_id, part_path).duplicate(true)
+    }
+
+func _write_part_history_state(model_id: String, part_path: String, state: Dictionary) -> void:
+    var base_by_model: Dictionary = element_offsets.get(model_id, {})
+    base_by_model[part_path] = state.get("base", PoseTrack.identity()).duplicate(true)
+    element_offsets[model_id] = base_by_model
+    var track_by_model: Dictionary = part_pose_tracks.get(model_id, {})
+    var keys: Array = state.get("keys", [])
+    if keys.is_empty():
+        track_by_model.erase(part_path)
+    else:
+        track_by_model[part_path] = keys.duplicate(true)
+    part_pose_tracks[model_id] = track_by_model
+
+func _remember_part_edit(model_id: String, part_path: String, before: Dictionary) -> void:
+    var after := _read_part_history_state(model_id, part_path)
+    if JSON.stringify(before) == JSON.stringify(after):
+        return
+    undo_stack.append({
+        "model": model_id,
+        "path": part_path,
+        "before": before.duplicate(true),
+        "after": after.duplicate(true)
+    })
+    if undo_stack.size() > 40:
+        undo_stack.pop_front()
+    redo_stack.clear()
+
+func _undo_part_edit() -> void:
+    _set_playing(false)
+    if undo_stack.is_empty():
+        _show_message("取り消す部位編集がありません")
+        return
+    var action: Dictionary = undo_stack.pop_back()
+    _write_part_history_state(str(action["model"]), str(action["path"]), action["before"])
+    redo_stack.append(action)
+    _refresh_timeline()
+    _seek(current_time)
+    _show_message("部位編集を取り消しました")
+
+func _redo_part_edit() -> void:
+    _set_playing(false)
+    if redo_stack.is_empty():
+        _show_message("やり直す部位編集がありません")
+        return
+    var action: Dictionary = redo_stack.pop_back()
+    _write_part_history_state(str(action["model"]), str(action["path"]), action["after"])
+    undo_stack.append(action)
+    _refresh_timeline()
+    _seek(current_time)
+    _show_message("部位編集をやり直しました")
+
+func _store_pose_key(model_id: String, part_path: String, time: float, pose: Dictionary) -> void:
+    var by_model: Dictionary = part_pose_tracks.get(model_id, {})
+    by_model[part_path] = PoseTrack.upsert(_pose_keys(model_id, part_path), time, pose)
+    part_pose_tracks[model_id] = by_model
+
+func _insert_selected_part_key() -> void:
+    if selected_part_model != selected_id or selected_part_path.is_empty():
+        _show_message("関節・パーツを選択してください")
+        return
+    _set_playing(false)
+    var before := _read_part_history_state(selected_id, selected_part_path)
+    _store_pose_key(selected_id, selected_part_path, current_time,
+        _sample_pose(selected_id, selected_part_path, current_time))
+    _remember_part_edit(selected_id, selected_part_path, before)
+    _refresh_timeline()
+    _seek(current_time)
+    _show_message("%.2f秒に関節ポーズ◆を記録" % current_time)
+
+func _get_part_offset(model_id: String, path: String) -> Dictionary:
+    # The current pose delta is included in what the user sees and edits.
+    return PoseTrack.combine(
+        _get_static_part_offset(model_id, path),
+        _sample_pose(model_id, path, current_time))
 
 func _capture_static_element_rest(model_id: String) -> void:
     if not bb_assets.has(model_id) or not objects_by_id.has(model_id):
@@ -1516,44 +1613,63 @@ func _reset_static_elements() -> void:
 
 func _apply_element_offsets() -> void:
     _reset_static_elements()
-    for id_value in element_offsets.keys():
+    # Both static corrections and timed pose keys must be applied once, after
+    # the original Blockbench animation has reset its own group transforms.
+    var model_ids: Dictionary = {}
+    for model_id in element_offsets.keys():
+        model_ids[str(model_id)] = true
+    for model_id in part_pose_tracks.keys():
+        model_ids[str(model_id)] = true
+    for id_value in model_ids.keys():
         var model_id := str(id_value)
         if not objects_by_id.has(model_id):
             continue
         var root_node: Node3D = objects_by_id[model_id]
-        var offsets: Dictionary = element_offsets[model_id]
-        for path_value in offsets.keys():
+        var paths: Dictionary = {}
+        for path in (element_offsets.get(model_id, {}) as Dictionary).keys():
+            paths[str(path)] = true
+        for path in (part_pose_tracks.get(model_id, {}) as Dictionary).keys():
+            paths[str(path)] = true
+        for path_value in paths.keys():
             var path := str(path_value)
             var node: Node3D = root_node.get_node_or_null(NodePath(path)) as Node3D
             if node == null:
                 continue
-            var offset: Dictionary = offsets[path]
+            var offset := _get_part_offset(model_id, path)
             node.position += _array_to_vec(offset.get("position", [0, 0, 0]))
             node.rotation_degrees += _array_to_vec(offset.get("rotation", [0, 0, 0]))
-            var scale_value := _array_to_vec(offset.get("scale", [1, 1, 1]))
-            node.scale *= scale_value
+            node.scale *= _array_to_vec(offset.get("scale", [1, 1, 1]))
+
 
 func _commit_part_edit(node: Node3D, start_position: Vector3, start_rotation: Vector3, start_scale: Vector3, previous: Dictionary) -> void:
     if selected_part_model != selected_id or selected_part_path.is_empty():
         return
-    var original_pos := _array_to_vec(previous.get("position", [0, 0, 0]))
-    var original_rot := _array_to_vec(previous.get("rotation", [0, 0, 0]))
-    var original_scale := _array_to_vec(previous.get("scale", [1, 1, 1]))
-    var safe_scale := Vector3(
-        maxf(absf(start_scale.x), 0.0001),
-        maxf(absf(start_scale.y), 0.0001),
-        maxf(absf(start_scale.z), 0.0001))
-    var new_offset := {
-        "position": _vec_array(original_pos + node.position - start_position),
-        "rotation": _vec_array(original_rot + node.rotation_degrees - start_rotation),
-        "scale": _vec_array(original_scale * Vector3(
-            node.scale.x / safe_scale.x,
-            node.scale.y / safe_scale.y,
-            node.scale.z / safe_scale.z))
+    var model_id := selected_id
+    var path := selected_part_path
+    var before := _read_part_history_state(model_id, path)
+    var start_scale_safe := Vector3(
+        maxf(absf(start_scale.x), 0.00001),
+        maxf(absf(start_scale.y), 0.00001),
+        maxf(absf(start_scale.z), 0.00001))
+    var edit_delta := {
+        "position": _vec_array(node.position - start_position),
+        "rotation": _vec_array(node.rotation_degrees - start_rotation),
+        "scale": _vec_array(node.scale / start_scale_safe)
     }
-    var offsets: Dictionary = element_offsets.get(selected_id, {})
-    offsets[selected_part_path] = new_offset
-    element_offsets[selected_id] = offsets
+    var effective := PoseTrack.combine(previous, edit_delta)
+    if pose_record_mode:
+        # Keyframes are authored as DELTAS over the immutable static correction,
+        # not absolute Blockbench bone positions; this preserves source motion.
+        var pose := PoseTrack.relative(effective, _get_static_part_offset(model_id, path))
+        _store_pose_key(model_id, path, current_time, pose)
+    else:
+        # Static editing does not bake the animated pose into all frames.
+        var base := PoseTrack.relative(effective, _sample_pose(model_id, path, current_time))
+        var offsets: Dictionary = element_offsets.get(model_id, {})
+        offsets[path] = base
+        element_offsets[model_id] = offsets
+    _remember_part_edit(model_id, path, before)
+    _refresh_timeline()
     _seek(current_time)
     _update_gizmo()
 
@@ -1566,9 +1682,21 @@ func _reset_selected_transform() -> void:
         return
     _set_playing(false)
     if selected_part_model == selected_id and not selected_part_path.is_empty():
-        var per_model: Dictionary = element_offsets.get(selected_id, {})
-        per_model.erase(selected_part_path)
-        element_offsets[selected_id] = per_model
+        var before := _read_part_history_state(selected_id, selected_part_path)
+        if pose_record_mode:
+            var by_model: Dictionary = part_pose_tracks.get(selected_id, {})
+            var remaining := PoseTrack.remove_at(_pose_keys(selected_id, selected_part_path), current_time)
+            if remaining.is_empty():
+                by_model.erase(selected_part_path)
+            else:
+                by_model[selected_part_path] = remaining
+            part_pose_tracks[selected_id] = by_model
+        else:
+            var per_model: Dictionary = element_offsets.get(selected_id, {})
+            per_model.erase(selected_part_path)
+            element_offsets[selected_id] = per_model
+        _remember_part_edit(selected_id, selected_part_path, before)
+        _refresh_timeline()
         _seek(current_time)
     elif selected_id == "__camera__":
         shot_camera.transform = editor_camera.transform
