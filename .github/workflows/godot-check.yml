@@ -61,3 +61,8 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_pose_timeline.gd 2>&1 | tee /tmp/pose-timeline-test.log
           grep -F "POSE TIMELINE TEST PASSED" /tmp/pose-timeline-test.log
+      - name: Android portrait usability audit
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_usability_audit.gd 2>&1 | tee /tmp/usability-audit.log
+          grep -F "UX_AUDIT_FINISHED" /tmp/usability-audit.log
