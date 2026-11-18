@@ -307,6 +307,233 @@ func _build_interface() -> void:
     autosave_timer.timeout.connect(_autosave_project)
     add_child(autosave_timer)
 
+func _change_timeline_zoom(direction: int) -> void:
+    if timeline == null:
+        return
+    var target_zoom: float = timeline.zoom * (1.65 if direction > 0 else 1.0 / 1.65)
+    timeline.zoom_to(target_zoom, current_time)
+    _show_message("TL拡大: %.1f倍" % timeline.zoom)
+
+func _timeline_vertical_pan(pixels: float) -> void:
+    if timeline_scroll == null:
+        return
+    timeline_scroll.scroll_vertical = maxi(0, timeline_scroll.scroll_vertical + roundi(pixels))
+
+func _build_file_menu() -> void:
+    file_menu = PopupPanel.new()
+    add_child(file_menu)
+    var choices := VBoxContainer.new()
+    choices.custom_minimum_size = Vector2(260, 0)
+    choices.add_theme_constant_override("separation", 6)
+    file_menu.add_child(choices)
+    for entry in [
+        {"title":"💾 保存", "action":_save_project},
+        {"title":"📂 保存済みを開く", "action":_load_project},
+        {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
+        {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
+        {"title":"＋ 新しいムービー", "action":_confirm_new_project},
+        {"title":"🗑 選択モデルを削除", "action":_confirm_delete_model}
+    ]:
+        var action: Callable = entry["action"]
+        var button := _make_button(choices, str(entry["title"]), func():
+            file_menu.hide()
+            action.call())
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        button.custom_minimum_size.y = 52
+    confirm_new = ConfirmationDialog.new()
+    confirm_new.title = "新しいムービーを作成"
+    confirm_new.dialog_text = "現在の編集内容を保存して、新しい空のムービーを作成しますか？"
+    confirm_new.confirmed.connect(_new_project)
+    add_child(confirm_new)
+    confirm_delete = ConfirmationDialog.new()
+    confirm_delete.title = "モデルを削除"
+    confirm_delete.dialog_text = "選択中のモデルを削除します。続けますか？"
+    confirm_delete.confirmed.connect(_delete_selected_model)
+    add_child(confirm_delete)
+
+func _open_file_menu() -> void:
+    file_menu.popup_centered(Vector2i(290, 364))
+
+func _confirm_new_project() -> void:
+    confirm_new.popup_centered()
+
+func _confirm_delete_model() -> void:
+    if not objects_by_id.has(selected_id):
+        _show_message("削除するモデルを選択してください")
+        return
+    confirm_delete.dialog_text = "「%s」を削除しますか？" % _model_title(selected_id)
+    confirm_delete.popup_centered()
+
+func _new_project() -> void:
+    _set_playing(false)
+    _autosave_project()
+    for node in objects_by_id.values():
+        (node as Node3D).queue_free()
+    objects_by_id.clear()
+    tracks.clear()
+    bb_assets.clear()
+    clip_tracks.clear()
+    element_offsets.clear()
+    static_element_rest.clear()
+    part_pose_tracks.clear()
+    undo_stack.clear()
+    redo_stack.clear()
+    next_id = 1
+    next_clip_id = 1
+    selected_id = ""
+    selected_part_path = ""
+    selected_part_model = ""
+    current_time = 0.0
+    camera_keys = [_capture_camera_key(0.0)]
+    _refresh_selector()
+    _refresh_timeline()
+    _seek(0.0)
+    _mark_dirty()
+    _show_message("新しいムービーを作成しました")
+
+func _delete_selected_model() -> void:
+    if not objects_by_id.has(selected_id):
+        return
+    _set_playing(false)
+    _autosave_project()
+    var id := selected_id
+    var node: Node3D = objects_by_id[id]
+    objects_by_id.erase(id)
+    tracks.erase(id)
+    bb_assets.erase(id)
+    clip_tracks.erase(id)
+    element_offsets.erase(id)
+    static_element_rest.erase(id)
+    part_pose_tracks.erase(id)
+    node.queue_free()
+    selected_id = ""
+    selected_part_path = ""
+    selected_part_model = ""
+    undo_stack.clear()
+    redo_stack.clear()
+    _refresh_selector()
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("モデルを削除しました。バックアップから復元できます")
+
+func _mark_dirty() -> void:
+    if not is_project_loading and autosave_timer != null:
+        autosave_timer.start()
+
+func _valid_project_json(source: String) -> bool:
+    var parsed: Variant = JSON.parse_string(source)
+    return parsed is Dictionary and int(parsed.get("version", -1)) in [1, 2, 3, 4] and parsed.get("objects", null) is Array
+
+func _write_project_text(source: String) -> bool:
+    if not _valid_project_json(source):
+        return false
+    var staging := FileAccess.open(TEMP_PATH, FileAccess.WRITE)
+    if staging == null:
+        return false
+    staging.store_string(source)
+    staging.flush()
+    staging.close()
+    if FileAccess.file_exists(SAVE_PATH):
+        var backup_error := DirAccess.copy_absolute(SAVE_PATH, BACKUP_PATH)
+        if backup_error != OK:
+            return false
+    var error := DirAccess.rename_absolute(TEMP_PATH, SAVE_PATH)
+    if error != OK:
+        # Some Android filesystems cannot rename over an existing destination.
+        error = DirAccess.copy_absolute(TEMP_PATH, SAVE_PATH)
+    return error == OK
+
+func _autosave_project() -> void:
+    if is_project_loading:
+        return
+    if autosave_timer != null:
+        autosave_timer.stop()
+    if not _write_project_text(JSON.stringify(_serialize_project(), "\t")):
+        _show_message("自動保存できません。空き容量を確認してください")
+
+func _notification(what: int) -> void:
+    if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
+        if autosave_timer != null and not autosave_timer.is_stopped():
+            _autosave_project()
+
+func _choose_project_export() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "ムービーを書き出す", "", "movie_project.json", false,
+            DisplayServer.FILE_DIALOG_MODE_SAVE_FILE,
+            PackedStringArray(["*.json;Movie Creatorプロジェクト;application/json"]),
+            _on_export_project_chosen)
+        if err == OK:
+            return
+    _open_project_fallback(true)
+
+func _on_export_project_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _export_project_path(selected[0])
+
+func _export_project_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        _show_message("書き出し先へ保存できません")
+        return false
+    file.store_string(JSON.stringify(_serialize_project(), "\t"))
+    file.close()
+    _show_message("プロジェクトを書き出しました")
+    return true
+
+func _choose_project_import() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "ムービーを読み込む", "", "", false,
+            DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
+            PackedStringArray(["*.json;Movie Creatorプロジェクト;application/json"]),
+            _on_import_project_chosen)
+        if err == OK:
+            return
+    _open_project_fallback(false)
+
+func _on_import_project_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _import_project_path(selected[0])
+
+func _import_project_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.READ)
+    if file == null:
+        _show_message("選択したファイルを開けません")
+        return false
+    if file.get_length() > 60000000:
+        file.close()
+        _show_message("プロジェクトが60MBを超えています")
+        return false
+    var source := file.get_as_text()
+    file.close()
+    if not _valid_project_json(source):
+        _show_message("対応しないプロジェクト形式です")
+        return false
+    _autosave_project()
+    if not _write_project_text(source):
+        _show_message("プロジェクトを安全に保存できません")
+        return false
+    _load_project()
+    return true
+
+func _open_project_fallback(exporting: bool) -> void:
+    if project_file_dialog != null:
+        project_file_dialog.queue_free()
+    project_file_dialog = FileDialog.new()
+    project_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+    project_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if exporting else FileDialog.FILE_MODE_OPEN_FILE
+    project_file_dialog.add_filter("*.json", "Movie Creatorプロジェクト")
+    if exporting:
+        project_file_dialog.file_selected.connect(_export_project_path)
+    else:
+        project_file_dialog.file_selected.connect(_import_project_path)
+    add_child(project_file_dialog)
+    project_file_dialog.popup_centered_ratio(0.9)
+
 func _choose_bbmodel() -> void:
     _set_playing(false)
     # Android native Storage Access Framework; FileAccess supports returned content:// URI.
