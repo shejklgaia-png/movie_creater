@@ -192,7 +192,7 @@ func _build_interface() -> void:
         {"text": "拡縮", "mode": 2}
     ]:
         var mode_button := _make_button(overlay_row, str(tool["text"]), _set_transform_mode.bind(int(tool["mode"])))
-        mode_button.custom_minimum_size = Vector2(51, 46)
+        mode_button.custom_minimum_size = Vector2(51, 48)
         mode_button.clip_text = true
         mode_button.focus_mode = Control.FOCUS_NONE
         transform_buttons.append(mode_button)
@@ -280,11 +280,11 @@ func _build_interface() -> void:
     selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
     selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     selection.clip_text = true
-    selection.custom_minimum_size = Vector2(98, 46)
+    selection.custom_minimum_size = Vector2(98, 48)
     part_picker_button = _make_button(properties, "階層", _open_part_picker)
-    part_picker_button.custom_minimum_size = Vector2(64, 46)
+    part_picker_button.custom_minimum_size = Vector2(64, 48)
     axis_option = _make_button(properties, "自由", _cycle_axis)
-    axis_option.custom_minimum_size = Vector2(74, 46)
+    axis_option.custom_minimum_size = Vector2(74, 48)
     axis_option.clip_text = true
 
     var nudge_row := HBoxContainer.new()
@@ -1910,7 +1910,7 @@ func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
         var path := str(root_node.get_path_to(part))
         var button := Button.new()
         button.text = ("  ".repeat(mini(depth, 6))) + _short_text(part.name, 23)
-        button.custom_minimum_size.y = 46
+        button.custom_minimum_size.y = 48
         button.clip_text = true
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.pressed.connect(_choose_part.bind(selected_id, path))
