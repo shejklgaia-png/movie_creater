@@ -1010,17 +1010,35 @@ func _begin_pointer(at: Vector2) -> void:
     pointer_origin = at
     pointer_last = at
     drag_moved = false
-    drag_target_id = _hit_object_id(at)
+    drag_handle_axis = 0
+    drag_part_path = ""
+    drag_target_node = null
+    # Gizmo handles have precedence so a part can be moved even when its
+    # pivot is outside the visible mesh. Otherwise tap the actual surface.
+    if mode_index != 3 and gizmo != null and gizmo.visible:
+        drag_handle_axis = gizmo.pick_axis(_viewport_position(at), editor_camera)
+    if drag_handle_axis > 0:
+        drag_target_id = selected_id
+        if selected_part_model == selected_id:
+            drag_part_path = selected_part_path
+    else:
+        drag_target_id = _hit_object_id(at)
+        if not drag_target_id.is_empty():
+            _set_selection(drag_target_id)
+            if not last_hit_part_path.is_empty() and bb_assets.has(drag_target_id):
+                _set_part_selection(drag_target_id, last_hit_part_path)
+                drag_part_path = selected_part_path
     if not drag_target_id.is_empty():
         _set_playing(false)
-        _set_selection(drag_target_id)
-        var node: Node3D = shot_camera if drag_target_id == "__camera__" else objects_by_id[drag_target_id]
-        drag_position_start = node.position
-        drag_rotation_start = node.rotation_degrees
-        var target_height := node.position.y
-        if drag_target_id != "__camera__" and str(node.get_meta("kind", "")) == "bbmodel":
-            target_height = _bbmodel_bounds(node).get_center().y
-        drag_grab_point = _world_on_level(at, target_height, node.position)
+        drag_target_node = _get_selected_target()
+        if drag_target_node == null:
+            drag_target_id = ""
+            return
+        drag_position_start = drag_target_node.position
+        drag_rotation_start = drag_target_node.rotation_degrees
+        drag_initial_scale = drag_target_node.scale
+        drag_existing_offset = _get_part_offset(drag_target_id, drag_part_path)
+        drag_grab_point = _world_on_level(at, drag_target_node.global_position.y, drag_target_node.global_position)
 
 func _move_pointer(at: Vector2) -> void:
     if not pointer_active:
@@ -1043,44 +1061,59 @@ func _move_pointer(at: Vector2) -> void:
 func _finish_pointer(at: Vector2) -> void:
     if not pointer_active:
         return
-    if drag_moved and not drag_target_id.is_empty():
+    if drag_moved and not drag_target_id.is_empty() and mode_index != 3:
         _apply_model_drag(at)
-        # A completed direct manipulation always produces a persistent keyframe.
-        if drag_target_id == "__camera__":
+        if not drag_part_path.is_empty() and drag_target_node != null:
+            _commit_part_edit(drag_target_node, drag_position_start, drag_rotation_start, drag_initial_scale, drag_existing_offset)
+            _show_message("部位の調整を保存しました")
+        elif drag_target_id == "__camera__":
             _insert_camera_key()
         else:
             _insert_key()
-        _show_message("指で編集した姿勢を %.2f 秒に記録しました" % current_time)
     pointer_active = false
     drag_moved = false
     drag_target_id = ""
+    drag_part_path = ""
+    drag_target_node = null
 
 func _apply_model_drag(at: Vector2) -> void:
-    if drag_target_id != "__camera__" and not objects_by_id.has(drag_target_id):
+    if mode_index == 3 or drag_target_node == null:
         return
-    var node: Node3D = shot_camera if drag_target_id == "__camera__" else objects_by_id[drag_target_id]
+    var node := drag_target_node
+    var axis := drag_handle_axis if drag_handle_axis > 0 else axis_index
     if mode_index == 1:
-        # Drag horizontally to rotate. In 'free' mode, rotate about world Y.
-        var axis: int = 1 if axis_index == 0 else axis_index - 1
         var angle := drag_rotation_start
-        angle[axis] += (at.x - pointer_origin.x) * 0.55
+        var rotate_axis: int = 1 if axis == 0 else axis - 1
+        angle[rotate_axis] += (at.x - pointer_origin.x) * 0.55
         node.rotation_degrees = angle
         return
-
+    if mode_index == 2:
+        var factor := clampf(exp((pointer_origin.y - at.y) * 0.009), 0.05, 20.0)
+        var scale_value := drag_initial_scale
+        if axis == 0:
+            scale_value *= Vector3.ONE * factor
+        else:
+            scale_value[axis - 1] *= factor
+        node.scale = scale_value
+        return
     var position := drag_position_start
-    if axis_index == 2:
-        # Vertical axis: drag upward to lift, with sensitivity based on camera distance.
+    if axis == 2:
         var height_scale: float = 2.0 * orbit_distance * tan(deg_to_rad(editor_camera.fov) * 0.5) / maxf(preview_box.size.y, 1.0)
-        position.y += (pointer_origin.y - at.y) * height_scale
+        var world_delta := Vector3.UP * (pointer_origin.y - at.y) * height_scale
+        var parent: Node3D = node.get_parent_node_3d()
+        var local_delta := parent.global_basis.inverse() * world_delta if parent != null else world_delta
+        position += local_delta
     else:
-        # Ground-plane manipulation; preserve the initial finger-to-object offset.
-        var hit := _world_on_level(at, drag_position_start.y, drag_grab_point)
-        var offset: Vector3 = hit - drag_grab_point
-        if axis_index == 0 or axis_index == 1:
-            position.x += offset.x
-        if axis_index == 0 or axis_index == 3:
-            position.z += offset.z
+        var hit := _world_on_level(at, drag_grab_point.y, drag_grab_point)
+        var world_delta: Vector3 = hit - drag_grab_point
+        var parent: Node3D = node.get_parent_node_3d()
+        var local_delta: Vector3 = parent.global_basis.inverse() * world_delta if parent != null else world_delta
+        if axis == 0 or axis == 1:
+            position.x += local_delta.x
+        if axis == 0 or axis == 3:
+            position.z += local_delta.z
     node.position = position
+
 
 func _two_finger_camera(changed_index: int, old_position: Vector2, new_position: Vector2) -> void:
     var indices: Array = touches.keys()
@@ -1119,7 +1152,8 @@ func _world_on_level(local: Vector2, height: float, fallback: Vector3) -> Vector
     return fallback
 
 func _hit_object_id(local: Vector2) -> String:
-    # Recursive mesh ray cast; supports imported nested cuboids.
+    # Recursive mesh hit test returns the nearest Blockbench element.
+    last_hit_part_path = ""
     var screen_pos := _viewport_position(local)
     var ray_origin := editor_camera.project_ray_origin(screen_pos)
     var ray_dir := editor_camera.project_ray_normal(screen_pos)
@@ -1152,6 +1186,10 @@ func _hit_object_id(local: Vector2) -> String:
                         if distance < closest_distance:
                             closest_distance = distance
                             closest_id = id
+                            last_hit_part_path = ""
+                            var editable_parent: Node = mesh.get_parent()
+                            if editable_parent is Node3D and editable_parent != root_node:
+                                last_hit_part_path = str(root_node.get_path_to(editable_parent))
             for child in item.get_children():
                 stack.append(child)
     return closest_id
@@ -1320,7 +1358,8 @@ func _update_gizmo() -> void:
     gizmo.global_position = target.global_position
     var distance := editor_camera.global_position.distance_to(target.global_position)
     gizmo.scale = Vector3.ONE * clampf(distance * 0.085, 0.15, 6.0)
-    gizmo.set_mode(mode_index) if gizmo.mode != mode_index else null
+    if gizmo.mode != mode_index:
+        gizmo.set_mode(mode_index)
 
 func _set_transform_mode(tool: int) -> void:
     mode_index = tool
