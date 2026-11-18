@@ -117,7 +117,7 @@ func _test() -> void:
         return
 
     var saved: Dictionary = editor.call("_serialize_project")
-    if int(saved.get("version", 0)) != 4:
+    if int(saved.get("version", 0)) != 5:
         _fail("Project version is not 3")
         return
     var record_valid := false

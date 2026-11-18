@@ -7,8 +7,11 @@ const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
 const ClipEngine = preload("res://scripts/clip_engine.gd")
 const TransformGizmo = preload("res://scripts/transform_gizmo.gd")
 const PoseTrack = preload("res://scripts/pose_track.gd")
+const CameraCuts = preload("res://scripts/camera_cuts.gd")
 const SAVE_PATH := "user://movie_project.json"
-const DURATION := 15.0
+const BACKUP_PATH := "user://movie_project.backup.json"
+const TEMP_PATH := "user://movie_project.tmp.json"
+var DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
 
 var scene_root: Node3D
@@ -26,6 +29,12 @@ var editor_camera: Camera3D
 var shot_camera: Camera3D
 var camera_marker: MeshInstance3D
 var camera_keys: Array = []
+# Camera 1 remains camera_keys for compatibility with v1-v4 files.
+var camera_tracks: Dictionary = {}
+var camera_cuts: Array = []
+var next_camera_id := 2
+var next_cut_id := 1
+var camera_menu: PopupPanel
 var shot_preview := false
 var clip_tracks: Dictionary = {}
 var next_clip_id := 1
@@ -45,6 +54,16 @@ var pose_record_mode := false
 # model_id -> (relative NodePath -> timeline pose keys)
 var part_pose_tracks: Dictionary = {}
 var bb_file_dialog: FileDialog
+var project_file_dialog: FileDialog
+var file_menu: PopupPanel
+var confirm_new: ConfirmationDialog
+var confirm_delete: ConfirmationDialog
+var duration_dialog: ConfirmationDialog
+var duration_input: SpinBox
+var autosave_timer: Timer
+var is_project_loading := false
+var tl_zoom_buttons: Array[Button] = []
+var tl_zoom_label: Label
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
@@ -128,15 +147,14 @@ func _build_interface() -> void:
     header.custom_minimum_size.y = 54
     layout.add_child(header)
     var app_title := Label.new()
-    app_title.text = "MOVIE CREATOR"
+    app_title.text = "MOVIE"
     app_title.add_theme_font_size_override("font_size", 19)
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
-    _make_button(header, "↶", _undo_part_edit).tooltip_text = "部位編集を元に戻す"
-    _make_button(header, "↷", _redo_part_edit).tooltip_text = "部位編集をやり直す"
-    _make_button(header, "保存", _save_project)
-    _make_button(header, "読込", _load_project)
+    _make_button(header, "↶", _undo_part_edit).tooltip_text = "関節編集のみ取り消し"
+    _make_button(header, "↷", _redo_part_edit).tooltip_text = "関節編集のみやり直し"
+    _make_button(header, "ファイル", _open_file_menu)
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -181,14 +199,15 @@ func _build_interface() -> void:
         if int(tool["mode"]) == 0:
             mode_option = mode_button
     part_label = Label.new()
-    part_label.anchor_top = 1.0
-    part_label.anchor_bottom = 1.0
+    # The name has its own upper-left lane, never sharing the right toolbar.
+    part_label.anchor_top = 0.0
+    part_label.anchor_bottom = 0.0
     part_label.anchor_left = 0.0
     part_label.anchor_right = 0.0
-    part_label.offset_left = 7.0
-    part_label.offset_right = 176.0
-    part_label.offset_top = -52.0
-    part_label.offset_bottom = -6.0
+    part_label.offset_left = 8.0
+    part_label.offset_right = 186.0
+    part_label.offset_top = 7.0
+    part_label.offset_bottom = 48.0
     part_label.clip_text = true
     part_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     part_label.add_theme_font_size_override("font_size", 12)
@@ -214,9 +233,11 @@ func _build_interface() -> void:
     time_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     time_slider.value_changed.connect(_seek)
     playback.add_child(time_slider)
+    _make_button(playback, "－", func(): _change_timeline_zoom(-1))
+    _make_button(playback, "＋", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
-    timeline_scroll.custom_minimum_size = Vector2(0, 164)
+    timeline_scroll.custom_minimum_size = Vector2(0, 152)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     dock.add_child(timeline_scroll)
@@ -225,8 +246,9 @@ func _build_interface() -> void:
     timeline_scroll.add_child(timeline)
     timeline.seek_requested.connect(_seek)
     timeline.key_dragged.connect(_on_key_dragged)
-    timeline.clip_tapped.connect(_open_clip_editor)
-    timeline.clip_dragged.connect(_on_clip_dragged)
+    timeline.clip_tapped.connect(_timeline_bar_tapped)
+    timeline.clip_dragged.connect(_timeline_bar_dragged)
+    timeline.vertical_pan_requested.connect(_timeline_vertical_pan)
 
     var add_row := HBoxContainer.new()
     dock.add_child(add_row)
@@ -240,6 +262,7 @@ func _build_interface() -> void:
     camera_view_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     _make_button(camera_row, "視点→撮影", _copy_editor_to_shot)
     _make_button(camera_row, "カメラ◆", _insert_camera_key)
+    _make_button(camera_row, "カット", _open_camera_menu)
     var motion_row := HBoxContainer.new()
     dock.add_child(motion_row)
     motion_button = _make_button(motion_row, "＋アニメを配置", _open_motion_picker)
@@ -266,18 +289,16 @@ func _build_interface() -> void:
 
     var nudge_row := HBoxContainer.new()
     dock.add_child(nudge_row)
-    _make_button(nudge_row, "－", func(): _nudge(-1.0))
-    var nudge_hint := Label.new()
-    nudge_hint.text = "微調整"
-    nudge_hint.clip_text = true
-    nudge_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    nudge_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    nudge_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    nudge_row.add_child(nudge_hint)
-    _make_button(nudge_row, "＋", func(): _nudge(1.0))
-    _make_button(nudge_row, "注視", _focus_selected)
-    _make_button(nudge_row, "戻す", _reset_selected_transform)
-    _make_button(nudge_row, "数値", _open_transform_inspector)
+    for action in [
+        {"text":"－", "call":func(): _nudge(-1.0)},
+        {"text":"＋", "call":func(): _nudge(1.0)},
+        {"text":"注視", "call":_focus_selected},
+        {"text":"戻す", "call":_reset_selected_transform},
+        {"text":"数値", "call":_open_transform_inspector}
+    ]:
+        var button := _make_button(nudge_row, str(action["text"]), action["call"])
+        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        button.custom_minimum_size.x = 0
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -289,6 +310,322 @@ func _build_interface() -> void:
     _build_picker()
     _build_clip_editor()
     _build_transform_inspector()
+    _build_file_menu()
+    _build_camera_menu()
+    autosave_timer = Timer.new()
+    autosave_timer.one_shot = true
+    autosave_timer.wait_time = 20.0
+    autosave_timer.timeout.connect(_autosave_project)
+    add_child(autosave_timer)
+
+func _change_timeline_zoom(direction: int) -> void:
+    if timeline == null:
+        return
+    var target_zoom: float = timeline.zoom * (1.65 if direction > 0 else 1.0 / 1.65)
+    timeline.zoom_to(target_zoom, current_time)
+    _show_message("TL拡大: %.1f倍" % timeline.zoom)
+
+func _timeline_vertical_pan(pixels: float) -> void:
+    if timeline_scroll == null:
+        return
+    timeline_scroll.scroll_vertical = maxi(0, timeline_scroll.scroll_vertical + roundi(pixels))
+
+func _build_file_menu() -> void:
+    file_menu = PopupPanel.new()
+    add_child(file_menu)
+    var choices := VBoxContainer.new()
+    choices.custom_minimum_size = Vector2(260, 0)
+    choices.add_theme_constant_override("separation", 6)
+    file_menu.add_child(choices)
+    for entry in [
+        {"title":"💾 保存", "action":_save_project},
+        {"title":"📂 保存済みを開く", "action":_load_project},
+        {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
+        {"title":"🎮 Godot再生データ出力", "action":_choose_runtime_export},
+        {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
+        {"title":"⏱ ムービーの長さ", "action":_show_duration_dialog},
+        {"title":"＋ 新しいムービー", "action":_confirm_new_project},
+        {"title":"🗑 選択モデルを削除", "action":_confirm_delete_model}
+    ]:
+        var action: Callable = entry["action"]
+        var button := _make_button(choices, str(entry["title"]), func():
+            file_menu.hide()
+            action.call())
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        button.custom_minimum_size.y = 52
+    confirm_new = ConfirmationDialog.new()
+    confirm_new.title = "新しいムービーを作成"
+    confirm_new.dialog_text = "現在の編集内容を保存して、新しい空のムービーを作成しますか？"
+    confirm_new.confirmed.connect(_new_project)
+    add_child(confirm_new)
+    confirm_delete = ConfirmationDialog.new()
+    confirm_delete.title = "モデルを削除"
+    confirm_delete.dialog_text = "選択中のモデルを削除します。続けますか？"
+    confirm_delete.confirmed.connect(_delete_selected_model)
+    add_child(confirm_delete)
+    duration_dialog = ConfirmationDialog.new()
+    duration_dialog.title = "ムービーの長さ（秒）"
+    duration_dialog.dialog_text = "時間軸の長さを設定してください（1～600秒）。"
+    duration_input = SpinBox.new()
+    duration_input.min_value = 1.0
+    duration_input.max_value = 600.0
+    duration_input.step = 1.0
+    duration_input.custom_minimum_size = Vector2(230, 48)
+    duration_dialog.add_child(duration_input)
+    duration_dialog.confirmed.connect(func(): _set_project_duration(duration_input.value))
+    add_child(duration_dialog)
+
+func _open_file_menu() -> void:
+    file_menu.popup_centered(Vector2i(290, 364))
+
+func _show_duration_dialog() -> void:
+    duration_input.set_value_no_signal(DURATION)
+    duration_dialog.popup_centered(Vector2i(310, 200))
+
+func _set_project_duration(seconds: float) -> void:
+    DURATION = clampf(seconds, 1.0, 600.0)
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
+    timeline.zoom_to(timeline.zoom, minf(current_time, DURATION))
+    _seek(minf(current_time, DURATION))
+    _mark_dirty()
+    _show_message("尺を%.0f秒に変更しました" % DURATION)
+
+func _confirm_new_project() -> void:
+    confirm_new.popup_centered()
+
+func _confirm_delete_model() -> void:
+    if not objects_by_id.has(selected_id):
+        _show_message("削除するモデルを選択してください")
+        return
+    confirm_delete.dialog_text = "「%s」を削除しますか？" % _model_title(selected_id)
+    confirm_delete.popup_centered()
+
+func _new_project() -> void:
+    _set_playing(false)
+    _autosave_project()
+    for node in objects_by_id.values():
+        (node as Node3D).queue_free()
+    objects_by_id.clear()
+    tracks.clear()
+    bb_assets.clear()
+    clip_tracks.clear()
+    camera_tracks.clear()
+    camera_cuts.clear()
+    next_camera_id = 2
+    next_cut_id = 1
+    element_offsets.clear()
+    static_element_rest.clear()
+    part_pose_tracks.clear()
+    undo_stack.clear()
+    redo_stack.clear()
+    next_id = 1
+    next_clip_id = 1
+    DURATION = 15.0
+    timeline.zoom = 1.0
+    timeline.view_start = 0.0
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
+    selected_id = ""
+    selected_part_path = ""
+    selected_part_model = ""
+    current_time = 0.0
+    camera_keys = [_capture_camera_key(0.0)]
+    _refresh_selector()
+    _refresh_timeline()
+    _seek(0.0)
+    _mark_dirty()
+    _show_message("新しいムービーを作成しました")
+
+func _delete_selected_model() -> void:
+    if not objects_by_id.has(selected_id):
+        return
+    _set_playing(false)
+    _autosave_project()
+    var id := selected_id
+    var node: Node3D = objects_by_id[id]
+    objects_by_id.erase(id)
+    tracks.erase(id)
+    bb_assets.erase(id)
+    clip_tracks.erase(id)
+    element_offsets.erase(id)
+    static_element_rest.erase(id)
+    part_pose_tracks.erase(id)
+    node.queue_free()
+    selected_id = ""
+    selected_part_path = ""
+    selected_part_model = ""
+    undo_stack.clear()
+    redo_stack.clear()
+    _refresh_selector()
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("モデルを削除しました。バックアップから復元できます")
+
+func _mark_dirty() -> void:
+    if not is_project_loading and autosave_timer != null:
+        autosave_timer.start()
+
+func _valid_project_json(source: String) -> bool:
+    var parsed: Variant = JSON.parse_string(source)
+    return parsed is Dictionary and int(parsed.get("version", -1)) in [1, 2, 3, 4, 5] and parsed.get("objects", null) is Array
+
+func _write_project_text(source: String) -> bool:
+    if not _valid_project_json(source):
+        return false
+    var staging := FileAccess.open(TEMP_PATH, FileAccess.WRITE)
+    if staging == null:
+        return false
+    staging.store_string(source)
+    staging.flush()
+    staging.close()
+    if FileAccess.file_exists(SAVE_PATH):
+        var backup_error := DirAccess.copy_absolute(SAVE_PATH, BACKUP_PATH)
+        if backup_error != OK:
+            return false
+    var error := DirAccess.rename_absolute(TEMP_PATH, SAVE_PATH)
+    if error != OK:
+        # Some Android filesystems cannot rename over an existing destination.
+        error = DirAccess.copy_absolute(TEMP_PATH, SAVE_PATH)
+    return error == OK
+
+func _autosave_project() -> void:
+    if is_project_loading:
+        return
+    if autosave_timer != null:
+        autosave_timer.stop()
+    if not _write_project_text(JSON.stringify(_serialize_project(), "\t")):
+        _show_message("自動保存できません。空き容量を確認してください")
+
+func _notification(what: int) -> void:
+    if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
+        if autosave_timer != null and not autosave_timer.is_stopped():
+            _autosave_project()
+
+func _serialize_runtime_data() -> Dictionary:
+    # The game resolves models by ID. Blockbench source data is deliberately
+    # omitted so runtime JSON is compact; models are supplied by Godot scenes.
+    var scene_data := _serialize_project()
+    var export_objects: Array = []
+    for entry in scene_data.get("objects", []):
+        var row: Dictionary = entry.duplicate(true)
+        row.erase("bb_source")
+        export_objects.append(row)
+    scene_data["objects"] = export_objects
+    scene_data.erase("version")
+    scene_data["schema"] = "movie_creator_runtime_v1"
+    scene_data["source_version"] = 5
+    return scene_data
+
+func _choose_runtime_export() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "Godotムービーデータを書き出す", "", "cutscene.movie.json", false,
+            DisplayServer.FILE_DIALOG_MODE_SAVE_FILE,
+            PackedStringArray(["*.json;Movie Creator runtime;application/json"]),
+            _on_runtime_export_chosen)
+        if err == OK:
+            return
+    var picker := FileDialog.new()
+    picker.access = FileDialog.ACCESS_FILESYSTEM
+    picker.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+    picker.add_filter("*.json", "Godotムービー再生データ")
+    picker.file_selected.connect(_export_runtime_path)
+    add_child(picker)
+    picker.popup_centered_ratio(0.9)
+
+func _on_runtime_export_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _export_runtime_path(selected[0])
+
+func _export_runtime_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        _show_message("Godot再生データを書き出せません")
+        return false
+    file.store_string(JSON.stringify(_serialize_runtime_data(), "\t"))
+    file.close()
+    _show_message("Godotムービー再生データを書き出しました")
+    return true
+
+func _choose_project_export() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "ムービーを書き出す", "", "movie_project.json", false,
+            DisplayServer.FILE_DIALOG_MODE_SAVE_FILE,
+            PackedStringArray(["*.json;Movie Creatorプロジェクト;application/json"]),
+            _on_export_project_chosen)
+        if err == OK:
+            return
+    _open_project_fallback(true)
+
+func _on_export_project_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _export_project_path(selected[0])
+
+func _export_project_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        _show_message("書き出し先へ保存できません")
+        return false
+    file.store_string(JSON.stringify(_serialize_project(), "\t"))
+    file.close()
+    _show_message("プロジェクトを書き出しました")
+    return true
+
+func _choose_project_import() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "ムービーを読み込む", "", "", false,
+            DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
+            PackedStringArray(["*.json;Movie Creatorプロジェクト;application/json"]),
+            _on_import_project_chosen)
+        if err == OK:
+            return
+    _open_project_fallback(false)
+
+func _on_import_project_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _import_project_path(selected[0])
+
+func _import_project_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.READ)
+    if file == null:
+        _show_message("選択したファイルを開けません")
+        return false
+    if file.get_length() > 60000000:
+        file.close()
+        _show_message("プロジェクトが60MBを超えています")
+        return false
+    var source := file.get_as_text()
+    file.close()
+    if not _valid_project_json(source):
+        _show_message("対応しないプロジェクト形式です")
+        return false
+    _autosave_project()
+    if not _write_project_text(source):
+        _show_message("プロジェクトを安全に保存できません")
+        return false
+    _load_project()
+    return true
+
+func _open_project_fallback(exporting: bool) -> void:
+    if project_file_dialog != null:
+        project_file_dialog.queue_free()
+    project_file_dialog = FileDialog.new()
+    project_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+    project_file_dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE if exporting else FileDialog.FILE_MODE_OPEN_FILE
+    project_file_dialog.add_filter("*.json", "Movie Creatorプロジェクト")
+    if exporting:
+        project_file_dialog.file_selected.connect(_export_project_path)
+    else:
+        project_file_dialog.file_selected.connect(_import_project_path)
+    add_child(project_file_dialog)
+    project_file_dialog.popup_centered_ratio(0.9)
 
 func _choose_bbmodel() -> void:
     _set_playing(false)
@@ -390,6 +727,7 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     var notices: Array = result.get("warnings", [])
     var issue_info := " / 注意あり" if not notices.is_empty() else ""
     _show_message("BB読込: %s｜%dメッシュ・%dモーション%s" % [_model_title(id), int(result.get("meshes", 0)), clips.size(), issue_info])
+    _mark_dirty()
     return true
 
 func _bbmodel_bounds(node: Node3D) -> AABB:
@@ -552,6 +890,7 @@ func _add_animation_clip(model_id: String, animation_index: int, at: float) -> v
     _refresh_timeline()
     _seek(current_time)
     _show_message("動作を配置: %s" % _short_text(str(animations[animation_index].get("name", "Animation")), 19))
+    _mark_dirty()
 
 func _find_clip_index(model_id: String, uid: String) -> int:
     var rows: Array = clip_tracks.get(model_id, [])
@@ -560,7 +899,7 @@ func _find_clip_index(model_id: String, uid: String) -> int:
             return i
     return -1
 
-func _on_clip_dragged(model_id: String, uid: String, at: float, _finished: bool) -> void:
+func _on_clip_dragged(model_id: String, uid: String, at: float, finished: bool) -> void:
     var index := _find_clip_index(model_id, uid)
     if index < 0:
         return
@@ -572,6 +911,8 @@ func _on_clip_dragged(model_id: String, uid: String, at: float, _finished: bool)
     clip_tracks[model_id] = rows
     _refresh_timeline()
     _seek(current_time)
+    if finished:
+        _mark_dirty()
 
 func _open_motion_picker() -> void:
     if not bb_assets.has(selected_id):
@@ -727,6 +1068,7 @@ func _save_edit_clip(clip: Dictionary) -> void:
     clip_tracks[editing_clip_model] = rows
     _refresh_timeline()
     _seek(current_time)
+    _mark_dirty()
 
 func _update_clip_field(value: float, field_name: String) -> void:
     var clip := _current_edit_clip()
@@ -815,7 +1157,8 @@ func _close_clip_editor() -> void:
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
     button.text = title
-    button.custom_minimum_size = Vector2(52, 48)
+    button.custom_minimum_size = Vector2(48, 48)
+    button.clip_text = true
     button.pressed.connect(action)
     parent.add_child(button)
     return button
@@ -903,6 +1246,125 @@ func _update_camera() -> void:
     # Refresh size/orientation when zooming and orbiting while paused.
     _update_gizmo()
 
+func _get_camera_tracks() -> Dictionary:
+    var tracks_all: Dictionary = camera_tracks.duplicate(true)
+    tracks_all["camera_1"] = camera_keys.duplicate(true)
+    return tracks_all
+
+func _get_camera_keys(camera_id: String) -> Array:
+    if camera_id == "camera_1":
+        return camera_keys
+    return camera_tracks.get(camera_id, [])
+
+func _set_camera_keys(camera_id: String, keys: Array) -> void:
+    if camera_id == "camera_1":
+        camera_keys = keys
+    else:
+        camera_tracks[camera_id] = keys
+
+func _active_camera_id() -> String:
+    var camera_id: String = CameraCuts.active_camera(camera_cuts, current_time)
+    if not _get_camera_tracks().has(camera_id):
+        return "camera_1"
+    return camera_id
+
+func _build_camera_menu() -> void:
+    camera_menu = PopupPanel.new()
+    add_child(camera_menu)
+    var content := VBoxContainer.new()
+    content.custom_minimum_size.x = 260
+    camera_menu.add_child(content)
+    _make_button(content, "＋ 新しい撮影カメラ", func():
+        camera_menu.hide()
+        _new_camera_and_cut())
+    _make_button(content, "✕ 現在のカットを削除", func():
+        camera_menu.hide()
+        _remove_current_camera_cut())
+    _make_button(content, "カメラ一覧を更新", _open_camera_menu)
+
+func _open_camera_menu() -> void:
+    # Rebuild only temporary camera-entry buttons; persistent menu controls
+    # are always the first three, so their taps remain stable.
+    var content: VBoxContainer = camera_menu.get_child(0)
+    while content.get_child_count() > 3:
+        var last_child: Node = content.get_child(content.get_child_count() - 1)
+        content.remove_child(last_child)
+        last_child.queue_free()
+    for camera_id_value in _get_camera_tracks().keys():
+        var camera_id := str(camera_id_value)
+        var button := _make_button(content,
+            "🎬 ここからCam %s" % camera_id.trim_prefix("camera_"),
+            _insert_camera_cut.bind(camera_id))
+        button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+    camera_menu.popup_centered()
+
+func _new_camera_and_cut() -> void:
+    _set_playing(false)
+    var camera_id := "camera_%d" % next_camera_id
+    next_camera_id += 1
+    var frame := {
+        "time": 0.0,
+        "position": [editor_camera.position.x, editor_camera.position.y, editor_camera.position.z],
+        "rotation": [editor_camera.rotation.x, editor_camera.rotation.y, editor_camera.rotation.z],
+        "fov": editor_camera.fov
+    }
+    camera_tracks[camera_id] = [frame]
+    _insert_camera_cut(camera_id)
+
+func _insert_camera_cut(camera_id: String) -> void:
+    if not _get_camera_tracks().has(camera_id):
+        return
+    _set_playing(false)
+    var uid := "cut_%d" % next_cut_id
+    next_cut_id += 1
+    camera_cuts = CameraCuts.insert_cut(camera_cuts, uid, camera_id, current_time, DURATION)
+    if camera_menu != null:
+        camera_menu.hide()
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("%.2f秒から%sを撮影に使用" % [current_time, camera_id])
+
+func _remove_current_camera_cut() -> void:
+    var winner := ""
+    var chosen_time := -INF
+    for entry in camera_cuts:
+        var t := float(entry.get("time", 0.0))
+        if t <= current_time and t >= chosen_time:
+            winner = str(entry.get("uid", ""))
+            chosen_time = t
+    if winner.is_empty():
+        _show_message("削除するカットがありません")
+        return
+    camera_cuts = CameraCuts.remove_cut(camera_cuts, winner)
+    _refresh_timeline()
+    _seek(current_time)
+    _mark_dirty()
+    _show_message("撮影カットを削除しました")
+
+func _timeline_bar_tapped(model_id: String, uid: String) -> void:
+    if model_id != "__cuts__":
+        _open_clip_editor(model_id, uid)
+        return
+    for cut in camera_cuts:
+        if str(cut.get("uid", "")) == uid:
+            _seek(float(cut.get("time", 0.0)))
+            _show_message("カット: %s" % str(cut.get("camera_id", "camera_1")))
+            return
+    _show_message("デフォルトカメラ（Cam 1）")
+
+func _timeline_bar_dragged(model_id: String, uid: String, seconds: float, finished: bool) -> void:
+    if model_id != "__cuts__":
+        _on_clip_dragged(model_id, uid, seconds, finished)
+        return
+    if uid == "implicit":
+        return
+    camera_cuts = CameraCuts.move_cut(camera_cuts, uid, seconds, DURATION)
+    _refresh_timeline()
+    _seek(current_time)
+    if finished:
+        _mark_dirty()
+
 func _capture_camera_key(at: float) -> Dictionary:
     return {
         "time": snappedf(at, 0.01),
@@ -915,18 +1377,23 @@ func _insert_camera_key() -> void:
     _set_playing(false)
     if shot_camera == null:
         return
+    var camera_id := _active_camera_id()
+    var keys: Array = _get_camera_keys(camera_id).duplicate(true)
     var key := _capture_camera_key(current_time)
     var replaced := false
-    for i in range(camera_keys.size()):
-        if absf(float(camera_keys[i].get("time", 0.0)) - current_time) < 0.03:
-            camera_keys[i] = key
+    for i in range(keys.size()):
+        if absf(float(keys[i].get("time", 0.0)) - current_time) < 0.03:
+            keys[i] = key
             replaced = true
             break
     if not replaced:
-        camera_keys.append(key)
-    camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        keys.append(key)
+    keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+    _set_camera_keys(camera_id, keys)
     _refresh_timeline()
-    _show_message("カメラ %.2f秒 ◆%s" % [current_time, "更新" if replaced else "追加"])
+    _show_message("Cam %s %.2f秒 ◆%s" % [camera_id.trim_prefix("camera_"), current_time, "更新" if replaced else "追加"])
+    _mark_dirty()
+
 
 func _toggle_camera_view() -> void:
     shot_preview = not shot_preview
@@ -948,31 +1415,14 @@ func _copy_editor_to_shot() -> void:
     _insert_camera_key()
 
 func _sample_camera() -> void:
-    if camera_keys.is_empty():
+    var selected_id := _active_camera_id()
+    var values: Dictionary = CameraCuts.sample_keys(_get_camera_keys(selected_id), current_time)
+    if values.is_empty():
         return
-    var first: Dictionary = camera_keys[0]
-    var a: Dictionary = first
-    var b: Dictionary = camera_keys[camera_keys.size() - 1]
-    if current_time <= float(a.get("time", 0.0)):
-        b = a
-    elif current_time >= float(b.get("time", 0.0)):
-        a = b
-    else:
-        for i in range(camera_keys.size() - 1):
-            var left: Dictionary = camera_keys[i]
-            var right: Dictionary = camera_keys[i + 1]
-            if current_time >= float(left["time"]) and current_time <= float(right["time"]):
-                a = left
-                b = right
-                break
-    var t0 := float(a.get("time", 0.0))
-    var t1 := float(b.get("time", t0))
-    var mix_t := 0.0 if absf(t1 - t0) < 0.00001 else clampf((current_time - t0) / (t1 - t0), 0.0, 1.0)
-    shot_camera.position = _array_to_vec(a.get("position", [])).lerp(_array_to_vec(b.get("position", [])), mix_t)
-    var qa := Quaternion(Basis.from_euler(_array_to_vec(a.get("rotation", [])), EULER_ORDER_YXZ))
-    var qb := Quaternion(Basis.from_euler(_array_to_vec(b.get("rotation", [])), EULER_ORDER_YXZ))
-    shot_camera.quaternion = qa.slerp(qb, mix_t)
-    shot_camera.fov = lerpf(float(a.get("fov", 54.0)), float(b.get("fov", 54.0)), mix_t)
+    shot_camera.position = values["position"]
+    shot_camera.quaternion = values["orientation"]
+    shot_camera.fov = float(values.get("fov", 54.0))
+
 
 func _on_preview_input(event: InputEvent) -> void:
     if shot_preview:
@@ -1092,6 +1542,8 @@ func _finish_pointer(at: Vector2) -> void:
             _insert_camera_key()
         else:
             _insert_key()
+    if drag_moved:
+        _mark_dirty()
     pointer_active = false
     drag_moved = false
     drag_target_id = ""
@@ -1245,6 +1697,7 @@ func _add_object(kind: String) -> void:
     _set_selection(id)
     _seek(current_time)
     _show_message("追加しました。位置を調整して◆で記録できます。")
+    _mark_dirty()
 
 func _create_object(id: String, kind: String, pos: Vector3, angles: Vector3, tint: String) -> void:
     var node := Node3D.new()
@@ -1446,7 +1899,7 @@ func _open_part_picker() -> void:
     picker_overlay.show()
 
 func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
-    if depth > 15:
+    if depth > 96:
         return
     for child in current.get_children():
         if not (child is Node3D) or child.name in ["SelectionFrame", "EditableMesh", "BBFaceMesh", "ShotCameraMarker", "TransformGizmo"]:
@@ -1522,6 +1975,7 @@ func _remember_part_edit(model_id: String, part_path: String, before: Dictionary
     if undo_stack.size() > 40:
         undo_stack.pop_front()
     redo_stack.clear()
+    _mark_dirty()
 
 func _undo_part_edit() -> void:
     _set_playing(false)
@@ -1534,6 +1988,7 @@ func _undo_part_edit() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("部位編集を取り消しました")
+    _mark_dirty()
 
 func _redo_part_edit() -> void:
     _set_playing(false)
@@ -1546,6 +2001,7 @@ func _redo_part_edit() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("部位編集をやり直しました")
+    _mark_dirty()
 
 func _store_pose_key(model_id: String, part_path: String, time: float, pose: Dictionary) -> void:
     var by_model: Dictionary = part_pose_tracks.get(model_id, {})
@@ -1564,6 +2020,7 @@ func _insert_selected_part_key() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("%.2f秒に関節ポーズ◆を記録" % current_time)
+    _mark_dirty()
 
 func _get_part_offset(model_id: String, path: String) -> Dictionary:
     # The current pose delta is included in what the user sees and edits.
@@ -1674,6 +2131,7 @@ func _commit_part_edit(node: Node3D, start_position: Vector3, start_rotation: Ve
     _refresh_timeline()
     _seek(current_time)
     _update_gizmo()
+    _mark_dirty()
 
 func _vec_array(vec: Vector3) -> Array:
     return [vec.x, vec.y, vec.z]
@@ -1710,6 +2168,7 @@ func _reset_selected_transform() -> void:
         _insert_key()
     _update_gizmo()
     _show_message("選択対象の調整をリセットしました")
+    _mark_dirty()
 
 func _build_transform_inspector() -> void:
     transform_overlay = Control.new()
@@ -2001,6 +2460,7 @@ func _insert_key() -> void:
     tracks[selected_id] = keys
     _refresh_timeline()
     _show_message("%.2f秒にキーフレームを%s" % [current_time, "更新" if replaced else "追加"])
+    _mark_dirty()
 
 func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) -> void:
     if id == "__pose__":
@@ -2020,16 +2480,23 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
         part_pose_tracks[selected_id] = by_model
         _refresh_timeline()
         _seek(new_time)
+        if finished:
+            _mark_dirty()
         return
     if id == "__camera__":
-        if index < 0 or index >= camera_keys.size():
+        var camera_id := _active_camera_id()
+        var keys: Array = _get_camera_keys(camera_id).duplicate(true)
+        if index < 0 or index >= keys.size():
             return
         _set_playing(false)
-        camera_keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
+        keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
         if finished:
-            camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+            keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        _set_camera_keys(camera_id, keys)
         _refresh_timeline()
         _seek(new_time)
+        if finished:
+            _mark_dirty()
         return
     if not tracks.has(id):
         return
@@ -2044,6 +2511,8 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
         keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
     _refresh_timeline()
     _seek(new_time)
+    if finished:
+        _mark_dirty()
 
 func _seek(seconds: float) -> void:
     current_time = clampf(seconds, 0.0, DURATION)
@@ -2102,9 +2571,12 @@ func _refresh_timeline() -> void:
         return
     var rows: Array[Dictionary] = []
     var camera_times: Array = []
-    for key in camera_keys:
+    var camera_id := _active_camera_id()
+    for key in _get_camera_keys(camera_id):
         camera_times.append(float(key.get("time", 0.0)))
-    rows.append({"id": "__camera__", "label": "🎥カメラ", "times": camera_times})
+    rows.append({"id": "__camera__", "label": "🎥Cam %s" % camera_id.trim_prefix("camera_"), "times": camera_times})
+    var camera_bars := CameraCuts.bars(camera_cuts, DURATION, _get_camera_tracks())
+    rows.append({"id": "__cuts__", "kind": "clips", "label": "🎬カット", "clips": camera_bars})
     for id_value in objects_by_id.keys():
         var id := str(id_value)
         var node: Node3D = objects_by_id[id]
@@ -2167,39 +2639,57 @@ func _serialize_project() -> Dictionary:
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 4, "duration": DURATION,
-        "camera_keys": camera_keys.duplicate(true), "objects": records}
+    return {"version": 5, "duration": DURATION,
+        "camera_keys": camera_keys.duplicate(true),
+        "camera_tracks": camera_tracks.duplicate(true),
+        "camera_cuts": camera_cuts.duplicate(true),
+        "objects": records}
 
 func _save_project() -> void:
     _set_playing(false)
-    var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-    if file == null:
-        _show_message("保存失敗: %s" % error_string(FileAccess.get_open_error()))
-        return
-    file.store_string(JSON.stringify(_serialize_project(), "\t"))
-    file.close()
-    _show_message("保存しました: movie_project.json")
+    if autosave_timer != null:
+        autosave_timer.stop()
+    if _write_project_text(JSON.stringify(_serialize_project(), "\t")):
+        _show_message("保存しました（バックアップ保持）")
+    else:
+        _show_message("保存できません。空き容量を確認してください")
 
 func _load_project() -> void:
     _set_playing(false)
     if not FileAccess.file_exists(SAVE_PATH):
-        _show_message("保存データがありません")
-        return
+        if FileAccess.file_exists(BACKUP_PATH):
+            var restore_error := DirAccess.copy_absolute(BACKUP_PATH, SAVE_PATH)
+            if restore_error != OK:
+                _show_message("バックアップの復元に失敗しました")
+                return
+        else:
+            _show_message("保存データがありません")
+            return
     var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
     if file == null:
         _show_message("読込に失敗しました")
         return
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4] or not (parsed.get("objects") is Array):
-        _show_message("未対応のプロジェクト形式です")
+    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4, 5] or not (parsed.get("objects") is Array):
+        _show_message("保存形式が不正です。バックアップを保持しています")
         return
+    is_project_loading = true
+    DURATION = clampf(float(parsed.get("duration", 15.0)), 1.0, 600.0)
+    time_slider.max_value = DURATION
+    timeline.duration = DURATION
+    timeline.zoom = 1.0
+    timeline.view_start = 0.0
     for node in objects_by_id.values():
         (node as Node3D).queue_free()
     objects_by_id.clear()
     tracks.clear()
     bb_assets.clear()
     clip_tracks.clear()
+    camera_tracks.clear()
+    camera_cuts.clear()
+    next_camera_id = 2
+    next_cut_id = 1
     element_offsets.clear()
     part_pose_tracks.clear()
     static_element_rest.clear()
@@ -2325,12 +2815,49 @@ func _load_project() -> void:
         if not cleaned.is_empty():
             cleaned.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
             camera_keys = cleaned
+    var extra_tracks: Variant = parsed.get("camera_tracks", {})
+    if extra_tracks is Dictionary:
+        for id_value in extra_tracks.keys():
+            var cam_id := str(id_value)
+            if not cam_id.begins_with("camera_") or cam_id == "camera_1" or not (extra_tracks[id_value] is Array):
+                continue
+            var cleaned_keys: Array = []
+            for entry in extra_tracks[id_value]:
+                if entry is Dictionary and entry.has("time") and entry.has("position") and entry.has("rotation"):
+                    cleaned_keys.append(entry.duplicate(true))
+            if cleaned_keys.is_empty():
+                continue
+            cleaned_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+            camera_tracks[cam_id] = cleaned_keys
+            var numeric_part := cam_id.trim_prefix("camera_")
+            if numeric_part.is_valid_int():
+                next_camera_id = maxi(next_camera_id, int(numeric_part) + 1)
+    var loaded_cuts: Variant = parsed.get("camera_cuts", [])
+    if loaded_cuts is Array:
+        for entry in loaded_cuts:
+            if not (entry is Dictionary):
+                continue
+            var cam_id := str(entry.get("camera_id", "camera_1"))
+            var uid := str(entry.get("uid", ""))
+            if not _get_camera_tracks().has(cam_id):
+                continue
+            if uid.is_empty():
+                uid = "cut_%d" % next_cut_id
+                next_cut_id += 1
+            elif uid.begins_with("cut_") and uid.substr(4).is_valid_int():
+                next_cut_id = maxi(next_cut_id, int(uid.substr(4)) + 1)
+            camera_cuts.append({"uid": uid, "camera_id": cam_id,
+                "time": clampf(float(entry.get("time", 0.0)), 0.0, DURATION)})
+        camera_cuts.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
     if bb_assets.has(selected_id):
         # Only reframe after the restore has completed, never on selection taps.
         _focus_bbmodel(objects_by_id[selected_id])
+    is_project_loading = false
+    if autosave_timer != null:
+        autosave_timer.stop()
     _show_message("プロジェクトを読み込みました")
 
 func _show_message(message: String) -> void:

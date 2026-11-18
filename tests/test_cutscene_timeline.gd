@@ -112,7 +112,7 @@ func _run() -> void:
         _fail("Edit camera did not return")
         return
     var saved: Dictionary = editor.call("_serialize_project")
-    if int(saved.get("version", 0)) != 4 or (saved["camera_keys"] as Array).size() != 2:
+    if int(saved.get("version", 0)) != 5 or (saved["camera_keys"] as Array).size() != 2:
         _fail("Camera keys were not serialized")
         return
     var found := false
