@@ -1059,7 +1059,7 @@ func _hit_object_id(local: Vector2) -> String:
     var ray_dir := editor_camera.project_ray_normal(screen_pos)
     var closest_id := ""
     var closest_distance := INF
-    if camera_marker != null and camera_marker.visible:
+    if camera_marker != null and camera_marker.visible and camera_marker.global_position.distance_to(editor_camera.global_position) > 0.8:
         var local_inv := camera_marker.global_transform.affine_inverse()
         var ray_start: Vector3 = local_inv * ray_origin
         var ray_axis: Vector3 = local_inv.basis * ray_dir
