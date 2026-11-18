@@ -76,6 +76,7 @@ func _build_interface() -> void:
     var layout := VBoxContainer.new()
     layout.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
     layout.add_theme_constant_override("separation", 4)
+    layout.clip_contents = true
     add_child(layout)
 
     var header := HBoxContainer.new()
@@ -125,7 +126,7 @@ func _build_interface() -> void:
     playback.add_child(time_slider)
 
     timeline = TimelineView.new()
-    timeline.custom_minimum_size = Vector2(0, 164)
+    timeline.custom_minimum_size = Vector2(0, 148)
     timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     dock.add_child(timeline)
     timeline.seek_requested.connect(_seek)
@@ -141,6 +142,8 @@ func _build_interface() -> void:
     dock.add_child(motion_row)
     motion_button = _make_button(motion_row, "モーション：なし ▷", _cycle_bb_animation)
     motion_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    motion_button.clip_text = true
+    motion_button.custom_minimum_size.x = 0
     motion_button.tooltip_text = "読み込んだモデルのアニメーションを切り替え"
 
 
@@ -148,22 +151,33 @@ func _build_interface() -> void:
     dock.add_child(properties)
     selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
     selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    mode_option = _make_button(properties, "移動 ↻", _cycle_mode)
-    axis_option = _make_button(properties, "自由 ↻", _cycle_axis)
+    selection.clip_text = true
+    selection.custom_minimum_size = Vector2(100, 46)
+    mode_option = _make_button(properties, "移動", _cycle_mode)
+    mode_option.custom_minimum_size = Vector2(76, 46)
+    mode_option.clip_text = true
+    axis_option = _make_button(properties, "自由", _cycle_axis)
+    axis_option.custom_minimum_size = Vector2(74, 46)
+    axis_option.clip_text = true
 
     var nudge_row := HBoxContainer.new()
     dock.add_child(nudge_row)
     _make_button(nudge_row, "－", func(): _nudge(-1.0))
     var nudge_hint := Label.new()
-    nudge_hint.text = "モデルを直接ドラッグできます"
+    nudge_hint.text = "微調整"
+    nudge_hint.clip_text = true
     nudge_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
     nudge_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     nudge_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     nudge_row.add_child(nudge_hint)
     _make_button(nudge_row, "＋", func(): _nudge(1.0))
+    _make_button(nudge_row, "注視", _focus_selected)
 
     status_label = Label.new()
-    status_label.custom_minimum_size.y = 28
+    status_label.custom_minimum_size = Vector2(0, 24)
+    status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    status_label.clip_text = true
+    status_label.autowrap_mode = TextServer.AUTOWRAP_OFF
     status_label.add_theme_font_size_override("font_size", 12)
     dock.add_child(status_label)
     _build_picker()
@@ -205,7 +219,31 @@ func _import_bbmodel_path(path: String) -> void:
         return
     var source := file.get_as_text()
     file.close()
-    _import_bbmodel_text(source, path.get_file().get_basename())
+    # Android SAF returns a content:// URI, not a human-readable filename.
+    # Prefer the name embedded in the Blockbench JSON.
+    _import_bbmodel_text(source, "BBモデル")
+
+func _safe_model_name(project_name: String, fallback: String, id: String) -> String:
+    var candidate := project_name.strip_edges()
+    if candidate.is_empty():
+        candidate = fallback.strip_edges()
+    if candidate.begins_with("content:") or candidate.contains("%2F") or candidate.contains("_2F") or candidate.length() > 48:
+        candidate = "BBモデル " + id
+    candidate = candidate.validate_node_name()
+    if candidate.is_empty():
+        candidate = "BBモデル " + id
+    return candidate.substr(0, 24)
+
+func _short_text(value: String, max_chars: int) -> String:
+    if value.length() <= max_chars:
+        return value
+    return value.substr(0, maxi(1, max_chars - 1)) + "…"
+
+func _model_title(id: String) -> String:
+    if not objects_by_id.has(id):
+        return "モデル"
+    var node: Node3D = objects_by_id[id]
+    return _short_text(node.name, 13)
 
 func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bool:
     var importer := BBModelImporter.new()
@@ -217,7 +255,7 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     var id := str(next_id)
     next_id += 1
     var node: Node3D = result["root"]
-    node.name = filename.validate_node_name()
+    node.name = _safe_model_name(str(result.get("model_name", "")), filename, id)
     node.set_meta("movie_id", id)
     node.set_meta("kind", "bbmodel")
     node.set_meta("tint", "#ffffff")
@@ -233,12 +271,13 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     }
     _refresh_selector()
     _set_selection(id)
-    _focus_bbmodel(node)
     _refresh_timeline()
     _seek(current_time)
+    # Animate first, then frame the *actual displayed* pose (not rest pose).
+    _focus_bbmodel(node)
     var notices: Array = result.get("warnings", [])
-    var issue_info := (" / 注意: " + str(notices[0])) if not notices.is_empty() else ""
-    _show_message("BB読込成功: %dメッシュ・%dキューブ・%dモーション%s" % [int(result.get("meshes", 0)), int(result["cubes"]), clips.size(), issue_info])
+    var issue_info := " / 注意あり" if not notices.is_empty() else ""
+    _show_message("BB読込: %s｜%dメッシュ・%dモーション%s" % [_model_title(id), int(result.get("meshes", 0)), clips.size(), issue_info])
     return true
 
 func _bbmodel_bounds(node: Node3D) -> AABB:
@@ -307,6 +346,13 @@ func _focus_bbmodel(model: Node3D) -> void:
     orbit_distance = clampf(radius / sin(minf(half_vertical_fov, half_horizontal_fov)) * 1.35, 2.5, 80.0)
     _update_camera()
 
+func _focus_selected() -> void:
+    if not objects_by_id.has(selected_id):
+        _show_message("注視するモデルを選択してください")
+        return
+    _focus_bbmodel(objects_by_id[selected_id])
+    _show_message("注視点を %s に合わせました" % _model_title(selected_id))
+
 func _cycle_bb_animation() -> void:
     if not bb_assets.has(selected_id):
         _show_message("先にBBモデルを選択してください")
@@ -331,7 +377,7 @@ func _refresh_motion_button() -> void:
     var clips: Array = asset.get("clips", [])
     var selected := int(asset.get("clip_index", -1))
     if selected >= 0 and selected < clips.size():
-        motion_button.text = "モーション：%s ▷" % str(clips[selected].get("name", "Animation"))
+        motion_button.text = "モーション：%s ▷" % _short_text(str(clips[selected].get("name", "Animation")), 18)
 
 func _sample_bb_animations() -> void:
     var sampler := BBModelImporter.new()
@@ -477,19 +523,27 @@ func _begin_pointer(at: Vector2) -> void:
         var node: Node3D = objects_by_id[drag_target_id]
         drag_position_start = node.position
         drag_rotation_start = node.rotation_degrees
-        drag_grab_point = _world_on_level(at, node.position.y, node.position)
+        var target_height := node.position.y
+        if str(node.get_meta("kind", "")) == "bbmodel":
+            target_height = _bbmodel_bounds(node).get_center().y
+        drag_grab_point = _world_on_level(at, target_height, node.position)
 
 func _move_pointer(at: Vector2) -> void:
     if not pointer_active:
         return
     var motion := at - pointer_last
     pointer_last = at
+    if not drag_moved:
+        if at.distance_to(pointer_origin) < 14.0:
+            return
+        drag_moved = true
+        # Discard the first large movement event so a tap/jitter cannot snap
+        # the camera view or move a distant model.
+        if drag_target_id.is_empty():
+            return
     if drag_target_id.is_empty():
         _orbit(motion)
         return
-    if not drag_moved and at.distance_to(pointer_origin) < 9.0:
-        return
-    drag_moved = true
     _apply_model_drag(at)
 
 func _finish_pointer(at: Vector2) -> void:
@@ -543,6 +597,9 @@ func _two_finger_camera(changed_index: int, old_position: Vector2, new_position:
     # The midpoint follows two fingers: intuitive world-space camera panning.
     var midpoint_motion := (new_position - old_position) * 0.5
     var world_per_pixel: float = 2.0 * orbit_distance * tan(deg_to_rad(editor_camera.fov) * 0.5) / maxf(preview_box.size.y, 1.0)
+    # Guard against a sudden Android touch pointer jump when pinching.
+    world_per_pixel = minf(world_per_pixel, 0.09)
+    midpoint_motion = midpoint_motion.limit_length(24.0)
     orbit_target += (editor_camera.global_transform.basis.x * -midpoint_motion.x + editor_camera.global_transform.basis.y * midpoint_motion.y) * world_per_pixel
     _update_camera()
 
@@ -686,20 +743,21 @@ func _set_selection(id: String) -> void:
     if not objects_by_id.has(id):
         return
     selected_id = id
-    selection.text = "%s ▾" % (objects_by_id[id] as Node3D).name
+    selection.text = "%s ▾" % _model_title(id)
     for object_id in objects_by_id.keys():
         var object_node: Node3D = objects_by_id[object_id]
         var frame: Node3D = object_node.get_node_or_null("SelectionFrame")
         if frame != null:
-            frame.visible = str(object_id) == selected_id
+            # A huge bounding wireframe obstructed imported character models.
+            frame.visible = str(object_id) == selected_id and str(object_node.get_meta("kind", "")) != "bbmodel"
     _refresh_motion_button()
-    _show_message("選択中: %s" % (objects_by_id[id] as Node3D).name)
+    _show_message("選択中: %s" % _model_title(id))
 
 func _refresh_selector() -> void:
     if selection == null:
         return
     if objects_by_id.has(selected_id):
-        selection.text = "%s ▾" % (objects_by_id[selected_id] as Node3D).name
+        selection.text = "%s ▾" % _model_title(selected_id)
     elif not objects_by_id.is_empty():
         _set_selection(str(objects_by_id.keys()[0]))
     else:
@@ -707,11 +765,11 @@ func _refresh_selector() -> void:
 
 func _cycle_mode() -> void:
     mode_index = (mode_index + 1) % 2
-    mode_option.text = ("移動 ↻" if mode_index == 0 else "回転 ↻")
+    mode_option.text = ("移動" if mode_index == 0 else "回転")
 
 func _cycle_axis() -> void:
     axis_index = (axis_index + 1) % 4
-    axis_option.text = ["自由 ↻", "X ↻", "Y ↻", "Z ↻"][axis_index]
+    axis_option.text = ["自由", "X", "Y", "Z"][axis_index]
 
 func _build_picker() -> void:
     # A native OptionButton PopupMenu is hard to dismiss on Android.
@@ -777,7 +835,8 @@ func _refresh_picker_list() -> void:
     for id_value in objects_by_id.keys():
         var item_id := str(id_value)
         var button := Button.new()
-        button.text = ("✓ " if item_id == selected_id else "　") + (objects_by_id[item_id] as Node3D).name
+        button.text = ("✓ " if item_id == selected_id else "　") + _short_text((objects_by_id[item_id] as Node3D).name, 24)
+        button.clip_text = true
         button.custom_minimum_size.y = 56.0
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -916,7 +975,7 @@ func _refresh_timeline() -> void:
         var times: Array = []
         for key in tracks.get(id, []):
             times.append(float(key.get("time", 0.0)))
-        rows.append({"id": id, "label": node.name, "times": times})
+        rows.append({"id": id, "label": _model_title(id), "times": times})
     timeline.set_tracks(rows)
 
 func _update_clock() -> void:
@@ -942,6 +1001,7 @@ func _serialize_project() -> Dictionary:
             "id": id,
             "kind": str(node.get_meta("kind", "box")),
             "tint": str(node.get_meta("tint", "#ffffff")),
+            "display_name": node.name,
             "keyframes": tracks.get(id, []),
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
@@ -1016,10 +1076,12 @@ func _load_project() -> void:
             var model: Node3D = bb_result["root"]
             model.position = pos
             model.rotation_degrees = angles
+            model.name = _safe_model_name(str(bb_result.get("model_name", "")), str(record.get("display_name", "BBモデル")), id)
             model.set_meta("movie_id", id)
             model.set_meta("kind", "bbmodel")
             model.set_meta("tint", "#ffffff")
             scene_root.add_child(model)
+            _add_bbmodel_selection_frame(model)
             objects_by_id[id] = model
             var clips: Array = bb_result.get("animations", [])
             bb_assets[id] = {
@@ -1032,8 +1094,12 @@ func _load_project() -> void:
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
+    if bb_assets.has(selected_id):
+        # Only reframe after the restore has completed, never on selection taps.
+        _focus_bbmodel(objects_by_id[selected_id])
     _show_message("プロジェクトを読み込みました")
 
 func _show_message(message: String) -> void:
     if status_label != null:
-        status_label.text = message
+        status_label.text = _short_text(message, 45)
+        status_label.tooltip_text = message
