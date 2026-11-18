@@ -66,3 +66,8 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_usability_audit.gd 2>&1 | tee /tmp/usability-audit.log
           grep -F "UX_AUDIT_FINISHED" /tmp/usability-audit.log
+      - name: Strict Android portrait UX regression
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_ux_fixes.gd 2>&1 | tee /tmp/ux-fixes.log
+          grep -F "UX FIX TEST PASSED" /tmp/ux-fixes.log
