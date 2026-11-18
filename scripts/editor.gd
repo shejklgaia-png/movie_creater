@@ -431,10 +431,6 @@ func _new_project() -> void:
     selected_part_model = ""
     current_time = 0.0
     camera_keys = [_capture_camera_key(0.0)]
-    camera_tracks.clear()
-    camera_cuts.clear()
-    next_camera_id = 2
-    next_cut_id = 1
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
@@ -2690,6 +2686,10 @@ func _load_project() -> void:
     tracks.clear()
     bb_assets.clear()
     clip_tracks.clear()
+    camera_tracks.clear()
+    camera_cuts.clear()
+    next_camera_id = 2
+    next_cut_id = 1
     element_offsets.clear()
     part_pose_tracks.clear()
     static_element_rest.clear()
