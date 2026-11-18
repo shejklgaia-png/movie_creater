@@ -53,7 +53,7 @@ func _run() -> void:
 
     var timeline: Control = editor.get("timeline")
     var scroller: ScrollContainer = editor.get("timeline_scroll")
-    var before_span := timeline._view_span()
+    var before_span: float = timeline._view_span()
     editor.call("_change_timeline_zoom", 1)
     if timeline._view_span() >= before_span:
         _fail("TL '+' did not zoom in")
