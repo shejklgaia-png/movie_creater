@@ -341,6 +341,7 @@ func _build_file_menu() -> void:
         {"title":"💾 保存", "action":_save_project},
         {"title":"📂 保存済みを開く", "action":_load_project},
         {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
+        {"title":"🎮 Godot再生データ出力", "action":_choose_runtime_export},
         {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
         {"title":"⏱ ムービーの長さ", "action":_show_duration_dialog},
         {"title":"＋ 新しいムービー", "action":_confirm_new_project},
@@ -505,6 +506,53 @@ func _notification(what: int) -> void:
     if what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_WM_CLOSE_REQUEST:
         if autosave_timer != null and not autosave_timer.is_stopped():
             _autosave_project()
+
+func _serialize_runtime_data() -> Dictionary:
+    # The game resolves models by ID. Blockbench source data is deliberately
+    # omitted so runtime JSON is compact; models are supplied by Godot scenes.
+    var scene_data := _serialize_project()
+    var export_objects: Array = []
+    for entry in scene_data.get("objects", []):
+        var row: Dictionary = entry.duplicate(true)
+        row.erase("bb_source")
+        export_objects.append(row)
+    scene_data["objects"] = export_objects
+    scene_data.erase("version")
+    scene_data["schema"] = "movie_creator_runtime_v1"
+    scene_data["source_version"] = 5
+    return scene_data
+
+func _choose_runtime_export() -> void:
+    _set_playing(false)
+    if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE):
+        var err: Error = DisplayServer.file_dialog_show(
+            "Godotムービーデータを書き出す", "", "cutscene.movie.json", false,
+            DisplayServer.FILE_DIALOG_MODE_SAVE_FILE,
+            PackedStringArray(["*.json;Movie Creator runtime;application/json"]),
+            _on_runtime_export_chosen)
+        if err == OK:
+            return
+    var picker := FileDialog.new()
+    picker.access = FileDialog.ACCESS_FILESYSTEM
+    picker.file_mode = FileDialog.FILE_MODE_SAVE_FILE
+    picker.add_filter("*.json", "Godotムービー再生データ")
+    picker.file_selected.connect(_export_runtime_path)
+    add_child(picker)
+    picker.popup_centered_ratio(0.9)
+
+func _on_runtime_export_chosen(accepted: bool, selected: PackedStringArray, _filter: int) -> void:
+    if accepted and not selected.is_empty():
+        _export_runtime_path(selected[0])
+
+func _export_runtime_path(path: String) -> bool:
+    var file := FileAccess.open(path, FileAccess.WRITE)
+    if file == null:
+        _show_message("Godot再生データを書き出せません")
+        return false
+    file.store_string(JSON.stringify(_serialize_runtime_data(), "\t"))
+    file.close()
+    _show_message("Godotムービー再生データを書き出しました")
+    return true
 
 func _choose_project_export() -> void:
     _set_playing(false)
