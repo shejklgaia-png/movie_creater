@@ -53,6 +53,21 @@ func _test() -> void:
     if visual_count != 18:
         _failure("Not all mesh parts created visible geometry: %d" % visual_count)
         return
+    # The source mesh's vertices are relative to its rotation pivot, so the
+    # geometry itself must remain centered around the LOCAL origin.
+    var local_group: Node3D = result["groups"]["grp_1"]["node"]
+    var local_part: Node3D = local_group.get_node_or_null("synthetic_part_1")
+    if local_part == null:
+        _failure("Nested mesh part lost")
+        return
+    var local_geometry: MeshInstance3D = local_part.get_node_or_null("BBFaceMesh")
+    if local_geometry == null or local_geometry.mesh == null:
+        _failure("Nested mesh geometry missing")
+        return
+    if local_geometry.mesh.get_aabb().get_center().length() > 0.0001:
+        _failure("Mesh vertices incorrectly offset by their pivot a second time")
+        return
+
     var clip: Dictionary = result["animations"][0]
     importer.apply_clip(result["groups"], clip, 1.0, false)
     var joint: Node3D = result["groups"]["grp_1"]["node"]
