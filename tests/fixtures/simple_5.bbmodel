@@ -1,0 +1,279 @@
+{
+  "meta": {
+    "format_version": "5.0",
+    "model_format": "free"
+  },
+  "resolution": {
+    "width": 16,
+    "height": 16
+  },
+  "textures": [
+    {
+      "uuid": "tex1",
+      "name": "body.png",
+      "uv_width": 16,
+      "uv_height": 16,
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGOsOPz1PwMDAwMTAxQAADCrAzO7RbKZAAAAAElFTkSuQmCC"
+    }
+  ],
+  "elements": [
+    {
+      "uuid": "cube1",
+      "name": "body",
+      "type": "cube",
+      "from": [
+        0,
+        0,
+        0
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ],
+      "origin": [
+        8,
+        8,
+        8
+      ],
+      "faces": {
+        "north": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "south": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "east": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "west": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "up": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "down": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        }
+      }
+    },
+    {
+      "uuid": "cube2",
+      "name": "arm",
+      "type": "cube",
+      "from": [
+        16,
+        8,
+        4
+      ],
+      "to": [
+        20,
+        16,
+        12
+      ],
+      "origin": [
+        16,
+        12,
+        8
+      ],
+      "faces": {
+        "north": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "south": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "east": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "west": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "up": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        },
+        "down": {
+          "texture": "tex1",
+          "uv": [
+            0,
+            0,
+            16,
+            16
+          ],
+          "rotation": 0
+        }
+      }
+    }
+  ],
+  "groups": [
+    {
+      "uuid": "body",
+      "name": "Body",
+      "origin": [
+        8,
+        8,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "uuid": "arm",
+      "name": "Arm",
+      "origin": [
+        16,
+        12,
+        8
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "outliner": [
+    {
+      "uuid": "body",
+      "children": [
+        "cube1",
+        {
+          "uuid": "arm",
+          "children": [
+            "cube2"
+          ]
+        }
+      ]
+    }
+  ],
+  "animations": [
+    {
+      "name": "wave",
+      "uuid": "wave1",
+      "length": 2,
+      "loop": "loop",
+      "animators": {
+        "arm": {
+          "keyframes": [
+            {
+              "channel": "rotation",
+              "time": 0,
+              "interpolation": "linear",
+              "data_points": [
+                {
+                  "x": 0,
+                  "y": 0,
+                  "z": 0
+                }
+              ]
+            },
+            {
+              "channel": "rotation",
+              "time": 1,
+              "interpolation": "linear",
+              "data_points": [
+                {
+                  "x": 0,
+                  "y": 90,
+                  "z": 0
+                }
+              ]
+            },
+            {
+              "channel": "rotation",
+              "time": 2,
+              "interpolation": "linear",
+              "data_points": [
+                {
+                  "x": 0,
+                  "y": 0,
+                  "z": 0
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
