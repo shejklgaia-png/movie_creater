@@ -76,3 +76,8 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_camera_cuts_runtime.gd 2>&1 | tee /tmp/roadmap-camera.log
           grep -F "ROADMAP CAMERA TEST PASSED" /tmp/roadmap-camera.log
+      - name: Portable game cutscene transform and bone callback
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_movie_runtime_transform.gd 2>&1 | tee /tmp/game-runtime.log
+          grep -F "GAME RUNTIME TEST PASSED" /tmp/game-runtime.log
