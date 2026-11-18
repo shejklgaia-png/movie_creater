@@ -245,7 +245,7 @@ func _on_preview_input(event: InputEvent) -> void:
                 var other_index: int = indices[0] if indices[1] == event.index else indices[1]
                 var other_position: Vector2 = touches[other_index]
                 var old_distance := old_position.distance_to(other_position)
-                var new_distance := event.position.distance_to(other_position)
+                var new_distance: float = event.position.distance_to(other_position)
                 if old_distance > 1.0 and new_distance > 1.0:
                     orbit_distance = clampf(orbit_distance * old_distance / new_distance, 2.0, 30.0)
                     _update_camera()
@@ -290,7 +290,7 @@ func _add_object(kind: String) -> void:
     var id := str(next_id)
     next_id += 1
     var spawn := Vector3(float(objects_by_id.size()) * 1.5 - 0.8, 0.7, 0.0)
-    var color := COLOR_SET[(next_id - 2) % COLOR_SET.size()]
+    var color: String = str(COLOR_SET[(next_id - 2) % COLOR_SET.size()])
     _create_object(id, kind, spawn, Vector3.ZERO, color)
     tracks[id] = [_capture_key(objects_by_id[id], 0.0)]
     _set_selection(id)
