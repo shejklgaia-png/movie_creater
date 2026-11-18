@@ -292,7 +292,9 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
             if not vertices.has(uuid):
                 valid = false
                 break
-            points.append((_to_vec(vertices[uuid]) - pivot) * UNIT)
+            # Blockbench polygon mesh vertices are ALREADY local to the element pivot.
+            # Cuboid from/to coordinates, in contrast, are absolute model coordinates.
+            points.append(_to_vec(vertices[uuid]) * UNIT)
             var uv_value: Variant = face_uv.get(uuid, [0, 0])
             if uv_value is Array and uv_value.size() >= 2:
                 uv_points.append(Vector2(float(uv_value[0]), float(uv_value[1])))
