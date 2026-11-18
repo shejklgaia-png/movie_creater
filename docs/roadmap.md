@@ -1,25 +1,28 @@
-# Movie Creator roadmap
+# Movie Creator 開発ロードマップ
 
-## Product decisions
-- Android-first, portrait-only editing UI. PC mouse compatibility is secondary.
-- Offline local project editing; no cloud account or network requirement.
-- Godot 4.7.x; GL Compatibility renderer for mobile.
-- Editable project data and in-game cutscene runtime will be separate.
+## 製品方針
+- **Android縦画面を最優先**。PC版は同じGodotプロジェクトから派生させます。
+- Blockbenchで制作した3Dモデル・既存モーションを活かし、ゲームのムービー演出をスマホで編集できるソフトを目指します。
+- 元の`.bbmodel`を改変せず、Movie Creator独自の編集データを別管理します。
+- Godot 4.7.2 / GL Compatibility。操作性・再生位置・関節階層の再現性を優先します。
 
-## MVP 0.1 (this commit)
-- Touch orbit / pinch zoom, mouse orbit / wheel zoom.
-- Primitive 3D objects, tap selection, position and rotation nudges.
-- Per-object keyed transforms, linear position and shortest-path rotation interpolation.
-- Touchable track timeline with key drag and playback/scrubbing.
-- Local JSON save/load under user://movie_project.json.
+## 実装済み（Ver.0.1〜0.6）
+- Androidでの基本3D表示、タッチによる視点回転／ピンチ、モデル選択・移動・回転・拡縮、XYZ操作ガイド。
+- `.bbmodel`のキューブ・自由形状メッシュ・グループ・ピボット・埋め込みテクスチャ・既存アニメーション読み込み。
+- タイムライン：モデル全体の移動・回転・拡縮キー、モデル別モーションクリップの配置／IN・OUT／速度／関節マスク、カメラキー。
+- 編集視点／撮影カメラの切り替え、カメラ位置キーフレーム。
+- **Ver.0.6：選択関節のポーズ補正を時刻別に記録／補間。ポーズON/OFF、選択関節のTLキー表示とドラッグ時刻移動、関節編集のUndo/Redo（40件）、プロジェクトv4で保存／復元。**
+- Godotヘッドレス統合テスト、AndroidデバッグAPK CI。
 
-## Next steps
-1. In-app Android Storage Access Framework import for GLB/glTF and audio; maintain stable material and skeleton references.
-2. Camera cut track and camera preview vs edit-camera separation.
-3. Bone/keyframe pose editing; model-specific rig and pivot handling.
-4. In-game Godot runtime, scene events, skipping, and game state restoration.
-5. Export project archive / import and share-sheet integration; Android build pipeline.
-6. Touch accessibility, autosave/history, undo-redo, performance profiling, automated tests.
+## 次に開発する機能（優先順）
+1. **カメラカット・複数カメラ・画角トラック**：ムービーの「いつ、どのカメラを使うか」をタイムラインで管理します。
+2. **演出イベント・ゲーム側再生ランタイム**：Godotシーンへ正確な位置／姿勢／時間を反映し、スキップや状態復元に対応させます。
+3. **ファイル入出力の充実**：プロジェクトアーカイブ共有／復元、Android SAF経由のGLB/glTF・音声読込。
+4. **編集操作の改善**：オートセーブ、全体Undo/Redo、数値／ジェスチャ調整、キーの複製・削除、レイヤー操作。
+5. **高度なモーション制作**：IK/FK、関節のカーブ補間、複数モーションの重ね合わせ／クロスフェード、制約・接触補正。
+6. **表現と出力**：効果音・BGM・字幕、照明・エフェクト、ムービー再生とエクスポートの検証。
 
-## Safety and scope
-This repository contains a standalone editor. Never modify the SERA or Pocket District repositories to develop this editor.
+## 注意事項
+- Ver.0.6の関節キーフレームは元アニメーションへの**加算型ポーズ補正**です。オリジナルのBlockbenchアニメーションの編集・書き戻し、IK、カメラカット、ゲーム書き出しは未実装です。
+- Androidの実機操作は自動テストで代替できないため、APKでの確認を引き続き行います。
+- SERA／Pocket Districtなど他のゲームリポジトリは改変しません。
