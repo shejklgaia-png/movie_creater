@@ -86,6 +86,10 @@ func pick_axis(pixel: Vector2, camera: Camera3D) -> int:
     var best := 20.0
     var axis_result := 0
     var center := camera.unproject_position(global_position)
+    # Never steal a normal object tap near the common axis pivot. Fingers
+    # must grab the OUTER half of a handle to activate an axis constraint.
+    if pixel.distance_to(center) < 26.0:
+        return 0
     for axis in range(3):
         var distance := INF
         if mode == 1:
@@ -95,7 +99,8 @@ func pick_axis(pixel: Vector2, camera: Camera3D) -> int:
                 distance = minf(distance, _pixel_to_segment(pixel, a, b))
         else:
             var end := camera.unproject_position(global_transform * (_basis_axis(axis) * 1.15))
-            distance = _pixel_to_segment(pixel, center, end)
+            var start: Vector2 = center.lerp(end, 0.45)
+            distance = _pixel_to_segment(pixel, start, end)
         if distance < best:
             best = distance
             axis_result = axis + 1 # move/rotate/scale axis selector index
