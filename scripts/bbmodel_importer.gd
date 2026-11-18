@@ -1,8 +1,18 @@
 extends RefCounted
-## Blockbench .bbmodel v4 and v5 cuboid import. Units: 16 Blockbench pixels = 1 Godot meter.
+## Blockbench .bbmodel v4/v5 cuboid + polygon mesh importer.
+## 16 Blockbench pixels = 1 Godot meter. In particular, free-form meshes are
+## NOT cubes (the user's actual Blockbench 5 assets use type "mesh" exclusively).
 ## Preserve absolute pivot locations through parent-relative node transforms.
 const UNIT := 0.0625
-const MAX_CUBES := 4000
+const MAX_ELEMENTS := 4000
+const MAX_MESH_VERTICES := 20000
+const MAX_POLYGON_VERTICES := 256
+const BLOCKBENCH_COLORS := [
+    "#ff6b6b", "#f6a45d", "#f6d365", "#90d26d",
+    "#58c6b9", "#63b8ec", "#7284ea", "#b18ce5",
+    "#ed8cd4", "#df83aa", "#c7d1de", "#86b7b9",
+    "#9bb66c", "#c4a885", "#829aaf", "#e1b7a7"
+]
 var warnings: Array[String] = []
 var _elements: Dictionary = {}
 var _groups: Dictionary = {}
@@ -11,6 +21,9 @@ var _dimensions: Dictionary = {}
 var _group_states: Dictionary = {}
 var _all_elements: Dictionary = {}
 var _cubes_created := 0
+var _meshes_created := 0
+var _triangles_created := 0
+var _default_texture_size := Vector2(16.0, 16.0)
 
 func import_text(source: String) -> Dictionary:
     warnings.clear()
@@ -21,6 +34,9 @@ func import_text(source: String) -> Dictionary:
     _group_states.clear()
     _all_elements.clear()
     _cubes_created = 0
+    _meshes_created = 0
+    _triangles_created = 0
+    _default_texture_size = Vector2(16.0, 16.0)
     var json := JSON.new()
     var err := json.parse(source)
     if err != OK or not (json.data is Dictionary):
@@ -31,7 +47,7 @@ func import_text(source: String) -> Dictionary:
     if not (document.get("outliner", null) is Array):
         return {"ok": false, "error": ".bbmodelのoutlinerがありません"}
     var entries: Array = document.get("elements", [])
-    if entries.size() > MAX_CUBES:
+    if entries.size() > MAX_ELEMENTS:
         return {"ok": false, "error": "モデルが大きすぎます（上限4000要素）"}
     for element_value in entries:
         if element_value is Dictionary:
@@ -49,12 +65,15 @@ func import_text(source: String) -> Dictionary:
     var hierarchy: Array = document.get("outliner", [])
     for entry in hierarchy:
         _build_outliner(entry, root, Vector3.ZERO)
-    if _cubes_created == 0:
-        for element in _elements.values():
-            _create_cube(element, root, Vector3.ZERO)
-    if _cubes_created == 0:
+    # Some BBModel files store geometry outside the outliner. Import only
+    # unreferenced elements; never duplicate geometry already in its groups.
+    for uuid in _elements.keys():
+        if not _all_elements.has(uuid):
+            _all_elements[uuid] = true
+            _create_element(_elements[uuid], root, Vector3.ZERO)
+    if _cubes_created + _meshes_created == 0:
         root.free()
-        return {"ok": false, "error": "表示できるキューブがありません"}
+        return {"ok": false, "error": "表示できる形状がありません（未対応の要素形式か空のモデルです）"}
     var clips: Array = []
     for animation_value in document.get("animations", []):
         if animation_value is Dictionary:
@@ -64,7 +83,8 @@ func import_text(source: String) -> Dictionary:
     return {
         "ok": true, "root": root, "groups": _group_states.duplicate(),
         "animations": clips, "warnings": warnings.duplicate(),
-        "cubes": _cubes_created, "textures": _materials.size()
+        "cubes": _cubes_created, "meshes": _meshes_created,
+        "triangles": _triangles_created, "textures": _materials.size()
     }
 
 func _parse_textures(raw: Variant, resolution: Variant) -> void:
@@ -73,6 +93,7 @@ func _parse_textures(raw: Variant, resolution: Variant) -> void:
     var base_size := Vector2(16, 16)
     if resolution is Dictionary:
         base_size = Vector2(maxf(1.0, float(resolution.get("width", 16))), maxf(1.0, float(resolution.get("height", 16))))
+    _default_texture_size = base_size
     for i in range(raw.size()):
         if not (raw[i] is Dictionary):
             continue
@@ -126,12 +147,21 @@ func _build_outliner(entry: Variant, parent: Node3D, parent_origin: Vector3) -> 
         var uuid := str(entry)
         if _elements.has(uuid) and not _all_elements.has(uuid):
             _all_elements[uuid] = true
-            _create_cube(_elements[uuid], parent, parent_origin)
+            _create_element(_elements[uuid], parent, parent_origin)
         return
     if not (entry is Dictionary):
         return
     var outline: Dictionary = entry
     var id := str(outline.get("uuid", ""))
+    # Newer Blockbench files may write elements inline as dictionaries.
+    if _elements.has(id) and not _groups.has(id):
+        if not _all_elements.has(id):
+            _all_elements[id] = true
+            _create_element(_elements[id], parent, parent_origin)
+        return
+    if outline.has("vertices") or outline.has("from"):
+        _create_element(outline, parent, parent_origin)
+        return
     var group: Dictionary = _groups.get(id, outline)
     var origin := _to_vec(group.get("origin", [0, 0, 0]))
     var node := Node3D.new()
@@ -152,10 +182,17 @@ func _build_outliner(entry: Variant, parent: Node3D, parent_origin: Vector3) -> 
     for child in children:
         _build_outliner(child, node, origin)
 
+func _create_element(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> void:
+    var kind := str(data.get("type", "cube"))
+    match kind:
+        "cube":
+            _create_cube(data, parent, parent_origin)
+        "mesh":
+            _create_mesh(data, parent, parent_origin)
+        _:
+            warnings.append("未対応の要素: %s" % kind)
+
 func _create_cube(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> void:
-    if str(data.get("type", "cube")) != "cube":
-        warnings.append("未対応の要素: %s" % str(data.get("type", "unknown")))
-        return
     var from := _to_vec(data.get("from", [0, 0, 0]))
     var to := _to_vec(data.get("to", [0, 0, 0]))
     var pivot := _to_vec(data.get("origin", (from + to) * 0.5))
@@ -200,6 +237,139 @@ func _create_cube(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
             instance.mesh = mesh
             cube.add_child(instance)
     _cubes_created += 1
+
+func _fallback_mesh_material(color_index: int) -> StandardMaterial3D:
+    var key := "__mesh_color_%d" % posmod(color_index, BLOCKBENCH_COLORS.size())
+    if _materials.has(key):
+        return _materials[key]
+    var material := StandardMaterial3D.new()
+    material.albedo_color = Color(BLOCKBENCH_COLORS[posmod(color_index, BLOCKBENCH_COLORS.size())])
+    material.roughness = 0.85
+    material.cull_mode = BaseMaterial3D.CULL_DISABLED
+    _materials[key] = material
+    return material
+
+func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> void:
+    var raw_vertices: Variant = data.get("vertices", {})
+    var raw_faces: Variant = data.get("faces", {})
+    if not (raw_vertices is Dictionary) or not (raw_faces is Dictionary):
+        warnings.append("頂点データが不正: %s" % str(data.get("name", "Mesh")))
+        return
+    var vertices: Dictionary = raw_vertices
+    var faces: Dictionary = raw_faces
+    if vertices.is_empty() or faces.is_empty() or vertices.size() > MAX_MESH_VERTICES:
+        warnings.append("空または頂点数が上限を超えるメッシュ: %s" % str(data.get("name", "Mesh")))
+        return
+    var pivot := _to_vec(data.get("origin", [0, 0, 0]))
+    var mesh_root := Node3D.new()
+    mesh_root.name = str(data.get("name", "Mesh")).validate_node_name()
+    mesh_root.position = (pivot - parent_origin) * UNIT
+    mesh_root.rotation_order = EULER_ORDER_XYZ
+    mesh_root.rotation_degrees = _to_vec(data.get("rotation", [0, 0, 0]))
+    mesh_root.visible = bool(data.get("visibility", true))
+    parent.add_child(mesh_root)
+
+    var records: Dictionary = {}
+    var untextured_key := "__fallback"
+    var color_index := int(data.get("color", 10))
+    var triangle_count := 0
+    for face_value in faces.values():
+        if not (face_value is Dictionary):
+            continue
+        var face: Dictionary = face_value
+        var raw_ids: Variant = face.get("vertices", [])
+        if not (raw_ids is Array):
+            continue
+        var face_ids: Array = raw_ids
+        if face_ids.size() < 3 or face_ids.size() > MAX_POLYGON_VERTICES:
+            continue
+        var points: Array[Vector3] = []
+        var uv_points: Array[Vector2] = []
+        var face_uv: Dictionary = face.get("uv", {})
+        var valid := true
+        for uuid_value in face_ids:
+            var uuid := str(uuid_value)
+            if not vertices.has(uuid):
+                valid = false
+                break
+            # Blockbench polygon mesh vertices are ALREADY local to the element pivot.
+            # Cuboid from/to coordinates, in contrast, are absolute model coordinates.
+            points.append(_to_vec(vertices[uuid]) * UNIT)
+            var uv_value: Variant = face_uv.get(uuid, [0, 0])
+            if uv_value is Array and uv_value.size() >= 2:
+                uv_points.append(Vector2(float(uv_value[0]), float(uv_value[1])))
+            else:
+                uv_points.append(Vector2.ZERO)
+        if not valid:
+            continue
+        # Newell's algorithm works for triangles, quads and non-axis-aligned n-gons.
+        var normal := Vector3.ZERO
+        for i in range(points.size()):
+            var p: Vector3 = points[i]
+            var q: Vector3 = points[(i + 1) % points.size()]
+            normal.x += (p.y - q.y) * (p.z + q.z)
+            normal.y += (p.z - q.z) * (p.x + q.x)
+            normal.z += (p.x - q.x) * (p.y + q.y)
+        if normal.length_squared() < 0.00000001:
+            continue
+        normal = normal.normalized()
+
+        # Triangulate in a dominant-axis plane to preserve concave polygon faces.
+        var polygon := PackedVector2Array()
+        var nabs := normal.abs()
+        for p in points:
+            if nabs.x >= nabs.y and nabs.x >= nabs.z:
+                polygon.append(Vector2(p.y, p.z))
+            elif nabs.y >= nabs.z:
+                polygon.append(Vector2(p.x, p.z))
+            else:
+                polygon.append(Vector2(p.x, p.y))
+        var indices := Geometry2D.triangulate_polygon(polygon)
+        if indices.is_empty():
+            # Degenerate self-intersecting polygons are ignored instead of
+            # turning one malformed face into an entirely failed import.
+            warnings.append("三角形分割できない面: %s" % mesh_root.name)
+            continue
+
+        var face_texture: Variant = face.get("texture", null)
+        var key := untextured_key if face_texture == null else str(face_texture)
+        if not records.has(key):
+            records[key] = []
+        (records[key] as Array).append({
+            "points": points, "uvs": uv_points,
+            "indices": indices, "normal": normal
+        })
+        triangle_count += indices.size() / 3
+
+    for material_key in records.keys():
+        var builder := SurfaceTool.new()
+        builder.begin(Mesh.PRIMITIVE_TRIANGLES)
+        var uv_size: Vector2 = _default_texture_size
+        var material: Material = _fallback_mesh_material(color_index)
+        if material_key != untextured_key:
+            uv_size = _dimensions.get(str(material_key), _default_texture_size)
+            material = _get_material(material_key)
+        for record in records[material_key]:
+            var points: Array = record["points"]
+            var uv_points: Array = record["uvs"]
+            var indices: PackedInt32Array = record["indices"]
+            var face_normal: Vector3 = record["normal"]
+            for i in indices:
+                builder.set_normal(face_normal)
+                builder.set_uv(uv_points[i] / uv_size)
+                builder.add_vertex(points[i])
+        builder.set_material(material)
+        var assembled := builder.commit()
+        if assembled != null and assembled.get_surface_count() > 0:
+            var instance := MeshInstance3D.new()
+            instance.name = "BBFaceMesh"
+            instance.mesh = assembled
+            mesh_root.add_child(instance)
+    if triangle_count > 0:
+        _meshes_created += 1
+        _triangles_created += triangle_count
+    else:
+        mesh_root.free()
 
 func _cube_faces(a: Vector3, b: Vector3) -> Dictionary:
     var x0 := a.x
