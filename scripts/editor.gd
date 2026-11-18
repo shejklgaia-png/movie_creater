@@ -409,6 +409,10 @@ func _new_project() -> void:
     tracks.clear()
     bb_assets.clear()
     clip_tracks.clear()
+    camera_tracks.clear()
+    camera_cuts.clear()
+    next_camera_id = 2
+    next_cut_id = 1
     element_offsets.clear()
     static_element_rest.clear()
     part_pose_tracks.clear()
@@ -426,6 +430,10 @@ func _new_project() -> void:
     selected_part_model = ""
     current_time = 0.0
     camera_keys = [_capture_camera_key(0.0)]
+    camera_tracks.clear()
+    camera_cuts.clear()
+    next_camera_id = 2
+    next_cut_id = 1
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
@@ -464,7 +472,7 @@ func _mark_dirty() -> void:
 
 func _valid_project_json(source: String) -> bool:
     var parsed: Variant = JSON.parse_string(source)
-    return parsed is Dictionary and int(parsed.get("version", -1)) in [1, 2, 3, 4] and parsed.get("objects", null) is Array
+    return parsed is Dictionary and int(parsed.get("version", -1)) in [1, 2, 3, 4, 5] and parsed.get("objects", null) is Array
 
 func _write_project_text(source: String) -> bool:
     if not _valid_project_json(source):
@@ -2432,12 +2440,15 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
             _mark_dirty()
         return
     if id == "__camera__":
-        if index < 0 or index >= camera_keys.size():
+        var camera_id := _active_camera_id()
+        var keys: Array = _get_camera_keys(camera_id).duplicate(true)
+        if index < 0 or index >= keys.size():
             return
         _set_playing(false)
-        camera_keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
+        keys[index]["time"] = snappedf(clampf(new_time, 0.0, DURATION), 0.01)
         if finished:
-            camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+            keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+        _set_camera_keys(camera_id, keys)
         _refresh_timeline()
         _seek(new_time)
         if finished:
@@ -2516,9 +2527,12 @@ func _refresh_timeline() -> void:
         return
     var rows: Array[Dictionary] = []
     var camera_times: Array = []
-    for key in camera_keys:
+    var camera_id := _active_camera_id()
+    for key in _get_camera_keys(camera_id):
         camera_times.append(float(key.get("time", 0.0)))
-    rows.append({"id": "__camera__", "label": "🎥カメラ", "times": camera_times})
+    rows.append({"id": "__camera__", "label": "🎥Cam %s" % camera_id.trim_prefix("camera_"), "times": camera_times})
+    var camera_bars := CameraCuts.bars(camera_cuts, DURATION, _get_camera_tracks())
+    rows.append({"id": "__cuts__", "kind": "clips", "label": "🎬カット", "clips": camera_bars})
     for id_value in objects_by_id.keys():
         var id := str(id_value)
         var node: Node3D = objects_by_id[id]
@@ -2581,8 +2595,11 @@ func _serialize_project() -> Dictionary:
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 4, "duration": DURATION,
-        "camera_keys": camera_keys.duplicate(true), "objects": records}
+    return {"version": 5, "duration": DURATION,
+        "camera_keys": camera_keys.duplicate(true),
+        "camera_tracks": camera_tracks.duplicate(true),
+        "camera_cuts": camera_cuts.duplicate(true),
+        "objects": records}
 
 func _save_project() -> void:
     _set_playing(false)
@@ -2610,7 +2627,7 @@ func _load_project() -> void:
         return
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4] or not (parsed.get("objects") is Array):
+    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4, 5] or not (parsed.get("objects") is Array):
         _show_message("保存形式が不正です。バックアップを保持しています")
         return
     is_project_loading = true
@@ -2750,6 +2767,40 @@ func _load_project() -> void:
         if not cleaned.is_empty():
             cleaned.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
             camera_keys = cleaned
+    var extra_tracks: Variant = parsed.get("camera_tracks", {})
+    if extra_tracks is Dictionary:
+        for id_value in extra_tracks.keys():
+            var cam_id := str(id_value)
+            if not cam_id.begins_with("camera_") or cam_id == "camera_1" or not (extra_tracks[id_value] is Array):
+                continue
+            var cleaned_keys: Array = []
+            for entry in extra_tracks[id_value]:
+                if entry is Dictionary and entry.has("time") and entry.has("position") and entry.has("rotation"):
+                    cleaned_keys.append(entry.duplicate(true))
+            if cleaned_keys.is_empty():
+                continue
+            cleaned_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
+            camera_tracks[cam_id] = cleaned_keys
+            var numeric_part := cam_id.trim_prefix("camera_")
+            if numeric_part.is_valid_int():
+                next_camera_id = maxi(next_camera_id, int(numeric_part) + 1)
+    var loaded_cuts: Variant = parsed.get("camera_cuts", [])
+    if loaded_cuts is Array:
+        for entry in loaded_cuts:
+            if not (entry is Dictionary):
+                continue
+            var cam_id := str(entry.get("camera_id", "camera_1"))
+            var uid := str(entry.get("uid", ""))
+            if not _get_camera_tracks().has(cam_id):
+                continue
+            if uid.is_empty():
+                uid = "cut_%d" % next_cut_id
+                next_cut_id += 1
+            elif uid.begins_with("cut_") and uid.substr(4).is_valid_int():
+                next_cut_id = maxi(next_cut_id, int(uid.substr(4)) + 1)
+            camera_cuts.append({"uid": uid, "camera_id": cam_id,
+                "time": clampf(float(entry.get("time", 0.0)), 0.0, DURATION)})
+        camera_cuts.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
     _refresh_selector()
     _refresh_timeline()
     _seek(0.0)
