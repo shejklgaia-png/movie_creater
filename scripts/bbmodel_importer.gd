@@ -81,7 +81,8 @@ func import_text(source: String) -> Dictionary:
             clips.append(anim)
             _check_animation_features(anim)
     return {
-        "ok": true, "root": root, "groups": _group_states.duplicate(),
+        "ok": true, "root": root, "model_name": str(document.get("name", "")),
+        "groups": _group_states.duplicate(),
         "animations": clips, "warnings": warnings.duplicate(),
         "cubes": _cubes_created, "meshes": _meshes_created,
         "triangles": _triangles_created, "textures": _materials.size()
