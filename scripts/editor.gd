@@ -4,6 +4,7 @@ extends Control
 
 const TimelineView = preload("res://scripts/timeline.gd")
 const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
+const ClipEngine = preload("res://scripts/clip_engine.gd")
 const SAVE_PATH := "user://movie_project.json"
 const DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
@@ -12,6 +13,14 @@ var scene_root: Node3D
 var preview: SubViewport
 var preview_box: SubViewportContainer
 var editor_camera: Camera3D
+var shot_camera: Camera3D
+var camera_marker: MeshInstance3D
+var camera_keys: Array = []
+var shot_preview := false
+var clip_tracks: Dictionary = {}
+var next_clip_id := 1
+var timeline_scroll: ScrollContainer
+var camera_view_button: Button
 var timeline: Control
 var clock_label: Label
 var status_label: Label
@@ -25,6 +34,14 @@ var bb_file_dialog: FileDialog
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
+var picker_title: Label
+var picker_mode := "model"
+var clip_overlay: Control
+var clip_title: Label
+var clip_fields: Dictionary = {}
+var clip_bone_list: VBoxContainer
+var editing_clip_model := ""
+var editing_clip_uid := ""
 var mode_index := 0
 var axis_index := 0
 
@@ -125,12 +142,18 @@ func _build_interface() -> void:
     time_slider.value_changed.connect(_seek)
     playback.add_child(time_slider)
 
+    timeline_scroll = ScrollContainer.new()
+    timeline_scroll.custom_minimum_size = Vector2(0, 164)
+    timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    dock.add_child(timeline_scroll)
     timeline = TimelineView.new()
-    timeline.custom_minimum_size = Vector2(0, 148)
     timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    dock.add_child(timeline)
+    timeline_scroll.add_child(timeline)
     timeline.seek_requested.connect(_seek)
     timeline.key_dragged.connect(_on_key_dragged)
+    timeline.clip_tapped.connect(_open_clip_editor)
+    timeline.clip_dragged.connect(_on_clip_dragged)
 
     var add_row := HBoxContainer.new()
     dock.add_child(add_row)
@@ -138,9 +161,15 @@ func _build_interface() -> void:
     _make_button(add_row, "＋球", func(): _add_object("sphere"))
     _make_button(add_row, "BB読込", _choose_bbmodel)
     _make_button(add_row, "◆ キー登録", _insert_key)
+    var camera_row := HBoxContainer.new()
+    dock.add_child(camera_row)
+    camera_view_button = _make_button(camera_row, "編集視点", _toggle_camera_view)
+    camera_view_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    _make_button(camera_row, "視点→撮影", _copy_editor_to_shot)
+    _make_button(camera_row, "カメラ◆", _insert_camera_key)
     var motion_row := HBoxContainer.new()
     dock.add_child(motion_row)
-    motion_button = _make_button(motion_row, "モーション：なし ▷", _cycle_bb_animation)
+    motion_button = _make_button(motion_row, "＋アニメを配置", _open_motion_picker)
     motion_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     motion_button.clip_text = true
     motion_button.custom_minimum_size.x = 0
@@ -181,6 +210,7 @@ func _build_interface() -> void:
     status_label.add_theme_font_size_override("font_size", 12)
     dock.add_child(status_label)
     _build_picker()
+    _build_clip_editor()
 
 func _choose_bbmodel() -> void:
     _set_playing(false)
@@ -452,6 +482,23 @@ func _build_3d_scene() -> void:
     editor_camera.fov = 54.0
     scene_root.add_child(editor_camera)
     _update_camera()
+
+    shot_camera = Camera3D.new()
+    shot_camera.name = "ShotCamera"
+    shot_camera.current = false
+    shot_camera.fov = 54.0
+    scene_root.add_child(shot_camera)
+    shot_camera.global_transform = editor_camera.global_transform
+    camera_marker = MeshInstance3D.new()
+    camera_marker.name = "ShotCameraMarker"
+    var marker_mesh := BoxMesh.new()
+    marker_mesh.size = Vector3(0.30, 0.22, 0.36)
+    camera_marker.mesh = marker_mesh
+    var camera_material := StandardMaterial3D.new()
+    camera_material.albedo_color = Color("#f4cf75")
+    camera_marker.material_override = camera_material
+    shot_camera.add_child(camera_marker)
+    camera_keys = [_capture_camera_key(0.0)]
 
 func _update_camera() -> void:
     var direction := Vector3(
