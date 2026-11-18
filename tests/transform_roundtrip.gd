@@ -3,6 +3,7 @@ extends SceneTree
 # Baseline engine contract: parent/child transforms, JSON numeric persistence,
 # and quaternion interpolation. This does NOT test application exporters.
 const EPS := 0.0001
+var failed := false
 
 func _initialize() -> void:
     var parent := Transform3D(Basis.from_euler(Vector3(0.2, 0.5, -0.1)).scaled(Vector3(1.2, 1.2, 1.2)), Vector3(3.0, -2.0, 1.0))
@@ -27,8 +28,11 @@ func _initialize() -> void:
     var q1 := Quaternion(Vector3.UP, PI / 2.0)
     var midpoint := q0.slerp(q1, 0.5)
     _check(absf(midpoint.get_angle() - PI / 4.0) < EPS, "rotation interpolation")
-    print("Transform roundtrip baseline: PASS")
-    quit(0)
+    if failed:
+        quit(1)
+    else:
+        print("Transform roundtrip baseline: PASS")
+        quit(0)
 
 func _check(condition: bool, label: String) -> void:
     if not condition:
