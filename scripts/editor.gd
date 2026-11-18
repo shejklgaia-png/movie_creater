@@ -5,6 +5,7 @@ extends Control
 const TimelineView = preload("res://scripts/timeline.gd")
 const BBModelImporter = preload("res://scripts/bbmodel_importer.gd")
 const ClipEngine = preload("res://scripts/clip_engine.gd")
+const TransformGizmo = preload("res://scripts/transform_gizmo.gd")
 const SAVE_PATH := "user://movie_project.json"
 const DURATION := 15.0
 const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
@@ -12,6 +13,11 @@ const COLOR_SET := ["#58b6e8", "#d991e8", "#edb565", "#83d59e", "#e9919c"]
 var scene_root: Node3D
 var preview: SubViewport
 var preview_box: SubViewportContainer
+var preview_panel: Control
+var part_label: Label
+var part_picker_button: Button
+var transform_buttons: Array[Button] = []
+var gizmo: Node3D
 var editor_camera: Camera3D
 var shot_camera: Camera3D
 var camera_marker: MeshInstance3D
@@ -44,6 +50,19 @@ var editing_clip_model := ""
 var editing_clip_uid := ""
 var mode_index := 0
 var axis_index := 0
+# Sub-element edits are additive to Blockbench animation (the original
+# .bbmodel and its keyframes remain unchanged).
+var selected_part_path := ""
+var selected_part_model := ""
+var last_hit_part_path := ""
+var element_offsets: Dictionary = {}
+var drag_part_path := ""
+var drag_target_node: Node3D
+var drag_initial_scale := Vector3.ONE
+var drag_existing_offset: Dictionary = {}
+var drag_handle_axis := 0
+var undo_stack: Array[Dictionary] = []
+var redo_stack: Array[Dictionary] = []
 
 var objects_by_id: Dictionary = {}
 var tracks: Dictionary = {}
@@ -108,12 +127,15 @@ func _build_interface() -> void:
     _make_button(header, "保存", _save_project)
     _make_button(header, "読込", _load_project)
 
+    preview_panel = Control.new()
+    preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    preview_panel.custom_minimum_size = Vector2(0, 230)
+    layout.add_child(preview_panel)
     preview_box = SubViewportContainer.new()
     preview_box.stretch = true
-    preview_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    preview_box.custom_minimum_size = Vector2(0, 230)
+    preview_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
     preview_box.mouse_filter = Control.MOUSE_FILTER_STOP
-    layout.add_child(preview_box)
+    preview_panel.add_child(preview_box)
     preview_box.gui_input.connect(_on_preview_input)
 
     preview = SubViewport.new()
@@ -121,6 +143,46 @@ func _build_interface() -> void:
     preview.render_target_update_mode = SubViewport.UPDATE_ALWAYS
     preview.own_world_3d = true
     preview_box.add_child(preview)
+
+    # Always-on modeling tools in the lower-right corner of the 3D preview.
+    var overlay_row := HBoxContainer.new()
+    overlay_row.anchor_left = 1.0
+    overlay_row.anchor_right = 1.0
+    overlay_row.anchor_top = 1.0
+    overlay_row.anchor_bottom = 1.0
+    overlay_row.offset_left = -232.0
+    overlay_row.offset_right = -7.0
+    overlay_row.offset_top = -53.0
+    overlay_row.offset_bottom = -5.0
+    overlay_row.add_theme_constant_override("separation", 3)
+    preview_panel.add_child(overlay_row)
+    for tool in [
+        {"text": "選択", "mode": 3},
+        {"text": "移動", "mode": 0},
+        {"text": "回転", "mode": 1},
+        {"text": "拡縮", "mode": 2}
+    ]:
+        var mode_button := _make_button(overlay_row, str(tool["text"]), _set_transform_mode.bind(int(tool["mode"])))
+        mode_button.custom_minimum_size = Vector2(51, 46)
+        mode_button.clip_text = true
+        mode_button.focus_mode = Control.FOCUS_NONE
+        transform_buttons.append(mode_button)
+        if int(tool["mode"]) == 0:
+            mode_option = mode_button
+    part_label = Label.new()
+    part_label.anchor_top = 1.0
+    part_label.anchor_bottom = 1.0
+    part_label.anchor_left = 0.0
+    part_label.anchor_right = 0.0
+    part_label.offset_left = 7.0
+    part_label.offset_right = 176.0
+    part_label.offset_top = -52.0
+    part_label.offset_bottom = -6.0
+    part_label.clip_text = true
+    part_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    part_label.add_theme_font_size_override("font_size", 12)
+    preview_panel.add_child(part_label)
+    _set_transform_mode(0)
 
     var dock := VBoxContainer.new()
     dock.add_theme_constant_override("separation", 3)
@@ -181,10 +243,9 @@ func _build_interface() -> void:
     selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
     selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     selection.clip_text = true
-    selection.custom_minimum_size = Vector2(100, 46)
-    mode_option = _make_button(properties, "移動", _cycle_mode)
-    mode_option.custom_minimum_size = Vector2(76, 46)
-    mode_option.clip_text = true
+    selection.custom_minimum_size = Vector2(98, 46)
+    part_picker_button = _make_button(properties, "階層", _open_part_picker)
+    part_picker_button.custom_minimum_size = Vector2(64, 46)
     axis_option = _make_button(properties, "自由", _cycle_axis)
     axis_option.custom_minimum_size = Vector2(74, 46)
     axis_option.clip_text = true
@@ -201,6 +262,7 @@ func _build_interface() -> void:
     nudge_row.add_child(nudge_hint)
     _make_button(nudge_row, "＋", func(): _nudge(1.0))
     _make_button(nudge_row, "注視", _focus_selected)
+    _make_button(nudge_row, "戻す", _reset_selected_transform)
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -809,6 +871,10 @@ func _build_3d_scene() -> void:
     camera_marker.material_override = camera_material
     shot_camera.add_child(camera_marker)
     camera_keys = [_capture_camera_key(0.0)]
+    gizmo = TransformGizmo.new()
+    gizmo.name = "TransformGizmo"
+    scene_root.add_child(gizmo)
+    gizmo.visible = false
 
 func _update_camera() -> void:
     var direction := Vector3(
