@@ -468,27 +468,10 @@ func _mark_dirty() -> void:
         autosave_timer.start()
 
 func _valid_project_json(source: String) -> bool:
-    var parsed: Variant = JSON.parse_string(source)
-    return parsed is Dictionary and int(parsed.get("version", -1)) in [1, 2, 3, 4, 5] and parsed.get("objects", null) is Array
+    return MovieProjectStorage.valid_source(source)
 
 func _write_project_text(source: String) -> bool:
-    if not _valid_project_json(source):
-        return false
-    var staging := FileAccess.open(TEMP_PATH, FileAccess.WRITE)
-    if staging == null:
-        return false
-    staging.store_string(source)
-    staging.flush()
-    staging.close()
-    if FileAccess.file_exists(SAVE_PATH):
-        var backup_error := DirAccess.copy_absolute(SAVE_PATH, BACKUP_PATH)
-        if backup_error != OK:
-            return false
-    var error := DirAccess.rename_absolute(TEMP_PATH, SAVE_PATH)
-    if error != OK:
-        # Some Android filesystems cannot rename over an existing destination.
-        error = DirAccess.copy_absolute(TEMP_PATH, SAVE_PATH)
-    return error == OK
+    return MovieProjectStorage.write_safe(source, SAVE_PATH, BACKUP_PATH, TEMP_PATH)
 
 func _autosave_project() -> void:
     if is_project_loading:
@@ -2656,24 +2639,11 @@ func _save_project() -> void:
 
 func _load_project() -> void:
     _set_playing(false)
-    if not FileAccess.file_exists(SAVE_PATH):
-        if FileAccess.file_exists(BACKUP_PATH):
-            var restore_error := DirAccess.copy_absolute(BACKUP_PATH, SAVE_PATH)
-            if restore_error != OK:
-                _show_message("バックアップの復元に失敗しました")
-                return
-        else:
-            _show_message("保存データがありません")
-            return
-    var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
-    if file == null:
-        _show_message("読込に失敗しました")
+    var loaded: Dictionary = MovieProjectStorage.read_with_backup(SAVE_PATH, BACKUP_PATH)
+    if not bool(loaded.get("ok", false)):
+        _show_message("保存データを読み込めません。バックアップも確認してください")
         return
-    var parsed: Variant = JSON.parse_string(file.get_as_text())
-    file.close()
-    if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4, 5] or not (parsed.get("objects") is Array):
-        _show_message("保存形式が不正です。バックアップを保持しています")
-        return
+    var parsed: Variant = JSON.parse_string(str(loaded["text"]))
     is_project_loading = true
     DURATION = clampf(float(parsed.get("duration", 15.0)), 1.0, 600.0)
     time_slider.max_value = DURATION
@@ -2858,7 +2828,7 @@ func _load_project() -> void:
     is_project_loading = false
     if autosave_timer != null:
         autosave_timer.stop()
-    _show_message("プロジェクトを読み込みました")
+    _show_message("バックアップから復元しました（保存すると確定）" if bool(loaded.get("recovered", false)) else "プロジェクトを読み込みました")
 
 func _show_message(message: String) -> void:
     if status_label != null:
