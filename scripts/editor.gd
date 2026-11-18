@@ -1133,9 +1133,10 @@ func _apply_model_drag(at: Vector2) -> void:
         var hit := _world_on_level(at, drag_grab_point.y, drag_grab_point)
         var world_delta: Vector3 = hit - drag_grab_point
         var parent: Node3D = node.get_parent_node_3d()
+        # Free drag stays on the global ground plane, including when a
+        # Blockbench part has a rotated parent; never discard parent-local Y.
         var local_delta: Vector3 = parent.global_basis.inverse() * world_delta if parent != null else world_delta
-        position.x += local_delta.x
-        position.z += local_delta.z
+        position += local_delta
     node.position = position
     _update_gizmo()
 
