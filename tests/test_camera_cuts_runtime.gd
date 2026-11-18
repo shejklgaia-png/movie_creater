@@ -76,8 +76,11 @@ func _run() -> void:
         _fail("Camera cut data not serialized in project v5")
         return
     editor.call("_save_project")
+    var on_disk := FileAccess.get_file_as_string("user://movie_project.json")
+    print("ROADMAP DEBUG before_save_cut=", str(data["camera_cuts"]), " on_disk_camera_2=", str(on_disk.contains("camera_2")), " disk_length=", str(on_disk.length()))
     editor.call("_load_project")
     var restored: Dictionary = editor.call("_serialize_project")
+    print("ROADMAP DEBUG restored_cut=", str(restored["camera_cuts"]), " restored_tracks=", str((restored["camera_tracks"] as Dictionary).keys()), " status=", str((editor.get("status_label") as Label).text))
     if (restored["camera_cuts"] as Array).size() != 1 or not (restored["camera_tracks"] as Dictionary).has("camera_2"):
         _fail("Saved camera cut and track not restored")
         return
