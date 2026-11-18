@@ -634,6 +634,7 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     var notices: Array = result.get("warnings", [])
     var issue_info := " / 注意あり" if not notices.is_empty() else ""
     _show_message("BB読込: %s｜%dメッシュ・%dモーション%s" % [_model_title(id), int(result.get("meshes", 0)), clips.size(), issue_info])
+    _mark_dirty()
     return true
 
 func _bbmodel_bounds(node: Node3D) -> AABB:
@@ -796,6 +797,7 @@ func _add_animation_clip(model_id: String, animation_index: int, at: float) -> v
     _refresh_timeline()
     _seek(current_time)
     _show_message("動作を配置: %s" % _short_text(str(animations[animation_index].get("name", "Animation")), 19))
+    _mark_dirty()
 
 func _find_clip_index(model_id: String, uid: String) -> int:
     var rows: Array = clip_tracks.get(model_id, [])
@@ -804,7 +806,7 @@ func _find_clip_index(model_id: String, uid: String) -> int:
             return i
     return -1
 
-func _on_clip_dragged(model_id: String, uid: String, at: float, _finished: bool) -> void:
+func _on_clip_dragged(model_id: String, uid: String, at: float, finished: bool) -> void:
     var index := _find_clip_index(model_id, uid)
     if index < 0:
         return
@@ -816,6 +818,8 @@ func _on_clip_dragged(model_id: String, uid: String, at: float, _finished: bool)
     clip_tracks[model_id] = rows
     _refresh_timeline()
     _seek(current_time)
+    if finished:
+        _mark_dirty()
 
 func _open_motion_picker() -> void:
     if not bb_assets.has(selected_id):
@@ -971,6 +975,7 @@ func _save_edit_clip(clip: Dictionary) -> void:
     clip_tracks[editing_clip_model] = rows
     _refresh_timeline()
     _seek(current_time)
+    _mark_dirty()
 
 func _update_clip_field(value: float, field_name: String) -> void:
     var clip := _current_edit_clip()
@@ -1172,6 +1177,7 @@ func _insert_camera_key() -> void:
     camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
     _refresh_timeline()
     _show_message("カメラ %.2f秒 ◆%s" % [current_time, "更新" if replaced else "追加"])
+    _mark_dirty()
 
 func _toggle_camera_view() -> void:
     shot_preview = not shot_preview
@@ -1337,6 +1343,8 @@ func _finish_pointer(at: Vector2) -> void:
             _insert_camera_key()
         else:
             _insert_key()
+    if drag_moved:
+        _mark_dirty()
     pointer_active = false
     drag_moved = false
     drag_target_id = ""
@@ -1490,6 +1498,7 @@ func _add_object(kind: String) -> void:
     _set_selection(id)
     _seek(current_time)
     _show_message("追加しました。位置を調整して◆で記録できます。")
+    _mark_dirty()
 
 func _create_object(id: String, kind: String, pos: Vector3, angles: Vector3, tint: String) -> void:
     var node := Node3D.new()
@@ -1767,6 +1776,7 @@ func _remember_part_edit(model_id: String, part_path: String, before: Dictionary
     if undo_stack.size() > 40:
         undo_stack.pop_front()
     redo_stack.clear()
+    _mark_dirty()
 
 func _undo_part_edit() -> void:
     _set_playing(false)
@@ -1779,6 +1789,7 @@ func _undo_part_edit() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("部位編集を取り消しました")
+    _mark_dirty()
 
 func _redo_part_edit() -> void:
     _set_playing(false)
@@ -1791,6 +1802,7 @@ func _redo_part_edit() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("部位編集をやり直しました")
+    _mark_dirty()
 
 func _store_pose_key(model_id: String, part_path: String, time: float, pose: Dictionary) -> void:
     var by_model: Dictionary = part_pose_tracks.get(model_id, {})
@@ -1809,6 +1821,7 @@ func _insert_selected_part_key() -> void:
     _refresh_timeline()
     _seek(current_time)
     _show_message("%.2f秒に関節ポーズ◆を記録" % current_time)
+    _mark_dirty()
 
 func _get_part_offset(model_id: String, path: String) -> Dictionary:
     # The current pose delta is included in what the user sees and edits.
@@ -1919,6 +1932,7 @@ func _commit_part_edit(node: Node3D, start_position: Vector3, start_rotation: Ve
     _refresh_timeline()
     _seek(current_time)
     _update_gizmo()
+    _mark_dirty()
 
 func _vec_array(vec: Vector3) -> Array:
     return [vec.x, vec.y, vec.z]
@@ -1955,6 +1969,7 @@ func _reset_selected_transform() -> void:
         _insert_key()
     _update_gizmo()
     _show_message("選択対象の調整をリセットしました")
+    _mark_dirty()
 
 func _build_transform_inspector() -> void:
     transform_overlay = Control.new()
@@ -2246,6 +2261,7 @@ func _insert_key() -> void:
     tracks[selected_id] = keys
     _refresh_timeline()
     _show_message("%.2f秒にキーフレームを%s" % [current_time, "更新" if replaced else "追加"])
+    _mark_dirty()
 
 func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) -> void:
     if id == "__pose__":
@@ -2265,6 +2281,8 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
         part_pose_tracks[selected_id] = by_model
         _refresh_timeline()
         _seek(new_time)
+        if finished:
+            _mark_dirty()
         return
     if id == "__camera__":
         if index < 0 or index >= camera_keys.size():
@@ -2275,6 +2293,8 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
             camera_keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
         _refresh_timeline()
         _seek(new_time)
+        if finished:
+            _mark_dirty()
         return
     if not tracks.has(id):
         return
@@ -2289,6 +2309,8 @@ func _on_key_dragged(id: String, index: int, new_time: float, finished: bool) ->
         keys.sort_custom(func(a, b): return float(a["time"]) < float(b["time"]))
     _refresh_timeline()
     _seek(new_time)
+    if finished:
+        _mark_dirty()
 
 func _seek(seconds: float) -> void:
     current_time = clampf(seconds, 0.0, DURATION)
@@ -2417,19 +2439,24 @@ func _serialize_project() -> Dictionary:
 
 func _save_project() -> void:
     _set_playing(false)
-    var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-    if file == null:
-        _show_message("保存失敗: %s" % error_string(FileAccess.get_open_error()))
-        return
-    file.store_string(JSON.stringify(_serialize_project(), "\t"))
-    file.close()
-    _show_message("保存しました: movie_project.json")
+    if autosave_timer != null:
+        autosave_timer.stop()
+    if _write_project_text(JSON.stringify(_serialize_project(), "\t")):
+        _show_message("保存しました（バックアップ保持）")
+    else:
+        _show_message("保存できません。空き容量を確認してください")
 
 func _load_project() -> void:
     _set_playing(false)
     if not FileAccess.file_exists(SAVE_PATH):
-        _show_message("保存データがありません")
-        return
+        if FileAccess.file_exists(BACKUP_PATH):
+            var restore_error := DirAccess.copy_absolute(BACKUP_PATH, SAVE_PATH)
+            if restore_error != OK:
+                _show_message("バックアップの復元に失敗しました")
+                return
+        else:
+            _show_message("保存データがありません")
+            return
     var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
     if file == null:
         _show_message("読込に失敗しました")
@@ -2437,8 +2464,9 @@ func _load_project() -> void:
     var parsed: Variant = JSON.parse_string(file.get_as_text())
     file.close()
     if not (parsed is Dictionary) or int(parsed.get("version", -1)) not in [1, 2, 3, 4] or not (parsed.get("objects") is Array):
-        _show_message("未対応のプロジェクト形式です")
+        _show_message("保存形式が不正です。バックアップを保持しています")
         return
+    is_project_loading = true
     for node in objects_by_id.values():
         (node as Node3D).queue_free()
     objects_by_id.clear()
@@ -2576,6 +2604,9 @@ func _load_project() -> void:
     if bb_assets.has(selected_id):
         # Only reframe after the restore has completed, never on selection taps.
         _focus_bbmodel(objects_by_id[selected_id])
+    is_project_loading = false
+    if autosave_timer != null:
+        autosave_timer.stop()
     _show_message("プロジェクトを読み込みました")
 
 func _show_message(message: String) -> void:
