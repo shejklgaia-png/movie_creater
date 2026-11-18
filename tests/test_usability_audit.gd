@@ -123,6 +123,29 @@ func _audit() -> void:
     if second_per_px > 0.03:
         issues.append("15s fixed-width timeline too coarse for frame-accurate keys")
 
+    # Stress a narrower portrait canvas for smaller phones / split windows.
+    editor.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+    editor.size = Vector2(360.0, 800.0)
+    await process_frame
+    await process_frame
+    var small_buttons: Array[Button] = []
+    _buttons(editor, small_buttons)
+    var narrow_toolbar: Control = (editor.get("transform_buttons") as Array)[0].get_parent()
+    var narrow_label: Label = editor.get("part_label")
+    var label_overlap := narrow_toolbar.get_global_rect().intersects(narrow_label.get_global_rect())
+    var narrow_overflow: Array[String] = []
+    for button in small_buttons:
+        var rect := button.get_global_rect()
+        if rect.position.x < -1.0 or rect.end.x > editor.size.x + 1.0:
+            narrow_overflow.append(button.text)
+    print("UX_AUDIT_NARROW editor=%.0fx%.0f preview=%.0fx%.0f label_overlap=%s overflow=%s" % [
+        editor.size.x, editor.size.y, preview.size.x, preview.size.y,
+        str(label_overlap), str(narrow_overflow)])
+    if label_overlap:
+        issues.append("Selected part label and modeling controls overlap on 360px canvas")
+    if not narrow_overflow.is_empty():
+        issues.append("Buttons outside 360px canvas")
+
     print("UX_AUDIT_RESULT finding_count=%d" % issues.size())
     for issue in issues:
         print("UX_AUDIT_WARNING: " + issue)
