@@ -177,6 +177,7 @@ func _build_interface() -> void:
     redo_button.tooltip_text = "関節編集のみやり直し"
     workspace_button = _make_button(header, "詳細", _toggle_workspace)
     workspace_button.custom_minimum_size = Vector2(52, 48)
+    workspace_button.toggle_mode = true
     workspace_button.add_theme_font_size_override("font_size", 13)
     workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
     var file_button := _make_button(header, "≡", _open_file_menu)
@@ -213,6 +214,7 @@ func _build_interface() -> void:
     camera_view_button.custom_minimum_size = Vector2(125, 48)
     camera_view_button.tooltip_text = "カメラ視点へ切り替え"
     camera_view_button.focus_mode = Control.FOCUS_NONE
+    camera_view_button.toggle_mode = true
     _ui_paint_button(camera_view_button, "tool", false)
 
     # Always-on modeling tools in the lower-right corner of the 3D preview.
@@ -264,6 +266,7 @@ func _build_interface() -> void:
     var playback := HBoxContainer.new()
     dock.add_child(playback)
     play_button = _make_button(playback, "▶", _toggle_play)
+    play_button.toggle_mode = true
     _ui_paint_button(play_button, "tool", false)
     clock_label = Label.new()
     clock_label.text = "00:00.00"
@@ -392,6 +395,7 @@ func _build_interface() -> void:
     motion_button = _category_action(motion_row, "＋アニメ配置", _open_motion_picker)
     motion_button.tooltip_text = "読み込んだモデルのアニメーションをタイムラインに追加"
     pose_record_button = _category_action(motion_row, "◆ポーズOFF", _toggle_pose_record)
+    pose_record_button.toggle_mode = true
     pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
     var animation_hint := Label.new()
     animation_hint.text = "バーをタップして再生範囲・使用関節を編集"
@@ -479,6 +483,7 @@ func _toggle_workspace() -> void:
 func _refresh_workspace() -> void:
     if workspace_button != null:
         workspace_button.text = "基本" if motion_workspace else "詳細"
+        workspace_button.set_pressed_no_signal(motion_workspace)
         _ui_paint_button(workspace_button, "tool", motion_workspace)
     if category_buttons.has("変形"):
         (category_buttons["変形"] as Control).visible = motion_workspace
@@ -1745,6 +1750,8 @@ func _toggle_camera_view() -> void:
         part_label.show()
         for tool_button in transform_buttons:
             tool_button.show()
+    camera_view_button.set_pressed_no_signal(shot_preview)
+    _ui_paint_button(camera_view_button, "tool", shot_preview)
     _update_gizmo()
 
 func _copy_editor_to_shot() -> void:
@@ -2216,7 +2223,9 @@ func _set_transform_mode(tool: int) -> void:
     for index in range(transform_buttons.size()):
         var button: Button = transform_buttons[index]
         var button_mode: int = [3, 0, 1, 2][index]
-        button.modulate = Color("#8ecaff") if button_mode == mode_index else Color.WHITE
+        var selected: bool = button_mode == mode_index
+        button.set_pressed_no_signal(selected)
+        _ui_paint_button(button, "tool", selected)
     _update_gizmo()
 
 func _open_part_picker() -> void:
@@ -2263,7 +2272,8 @@ func _choose_part(model_id: String, path: String) -> void:
 func _toggle_pose_record() -> void:
     pose_record_mode = not pose_record_mode
     pose_record_button.text = "◆ポーズON" if pose_record_mode else "◆ポーズOFF"
-    pose_record_button.modulate = Color("#ffda83") if pose_record_mode else Color.WHITE
+    pose_record_button.set_pressed_no_signal(pose_record_mode)
+    _ui_paint_button(pose_record_button, "tool", pose_record_mode)
     if pose_record_mode:
         _show_message("ポーズ記録ON：関節を動かすと現在時刻に◆を登録")
     else:
@@ -2958,6 +2968,8 @@ func _update_clock() -> void:
 func _set_playing(value: bool) -> void:
     playing = value
     play_button.text = "Ⅱ" if playing else "▶"
+    play_button.set_pressed_no_signal(playing)
+    _ui_paint_button(play_button, "tool", playing)
 
 func _toggle_play() -> void:
     if not playing and current_time >= DURATION:
