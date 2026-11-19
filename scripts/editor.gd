@@ -1030,10 +1030,14 @@ func _on_loop_end_dragged(model_id: String, uid: String, seconds: float, finishe
         return
     var rows: Array = clip_tracks[model_id]
     var clip: Dictionary = rows[index]
-    if not bool(clip.get("loop", false)):
-        return
     _set_playing(false)
+    # The loop grip is available even for a new, non-looping clip.
+    # Dragging it enables repeat playback and expands by whole cycles.
+    if not bool(clip.get("loop", false)):
+        clip["loop"] = true
     clip["loop_end"] = ClipEngine.snap_loop_end(clip, seconds, DURATION)
+    if editing_clip_model == model_id and editing_clip_uid == uid and clip_loop_check != null:
+        clip_loop_check.set_pressed_no_signal(true)
     rows[index] = clip
     clip_tracks[model_id] = rows
     _refresh_timeline()
@@ -1132,7 +1136,7 @@ func _build_clip_editor() -> void:
     clip_loop_check.toggled.connect(_toggle_clip_loop)
     settings.add_child(clip_loop_check)
     var loop_hint := Label.new()
-    loop_hint.text = "TL上の↻をドラッグすると、動作の終点でスナップしてループ回数を調整します"
+    loop_hint.text = "TL上の丸いループアイコンをドラッグすると自動的にループをONにし、1回分の動き単位で再生範囲を延ばせます"
     loop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     settings.add_child(loop_hint)
     clip_limit_check = CheckBox.new()
@@ -2802,6 +2806,7 @@ func _refresh_timeline() -> void:
                     "end": ClipEngine.end_time(bar),
                     "label": _short_text(str(animations[which].get("name", "Motion")), 12),
                     "loop": bool(bar.get("loop", false)),
+                    "loop_handle": true,
                     "cycle": ClipEngine.source_span(bar)
                 })
             rows.append({"id": id, "kind": "clips", "label": "↳動作", "clips": bars})
