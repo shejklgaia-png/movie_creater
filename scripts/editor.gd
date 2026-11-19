@@ -158,7 +158,7 @@ func _build_interface() -> void:
     layout.add_child(header)
     var app_title := Label.new()
     app_title.text = "ムークリ"
-    app_title.add_theme_font_size_override("font_size", 19)
+    app_title.add_theme_font_size_override("font_size", 15)
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
@@ -2530,7 +2530,7 @@ func _set_numeric_transform(value: float, channel: String, axis: int) -> void:
 
 func _cycle_axis() -> void:
     axis_index = (axis_index + 1) % 4
-    axis_option.text = ["自由", "X", "Y", "Z"][axis_index]
+    axis_option.text = ["軸：自由", "軸：X", "軸：Y", "軸：Z"][axis_index]
     _update_gizmo()
 
 func _build_picker() -> void:
