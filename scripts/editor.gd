@@ -70,7 +70,7 @@ var tl_zoom_label: Label
 # A single compact, two-row action panel is visible at a time on phones.
 var category_pages: Dictionary = {}
 var category_buttons: Dictionary = {}
-var active_category := "モデル"
+var active_category := "素材"
 var motion_workspace := false
 var workspace_button: Button
 var bb_assets: Dictionary = {}
@@ -157,14 +157,14 @@ func _build_interface() -> void:
     header.custom_minimum_size.y = 54
     layout.add_child(header)
     var app_title := Label.new()
-    app_title.text = "MOVIE"
-    app_title.add_theme_font_size_override("font_size", 19)
+    app_title.text = "ムークリ"
+    app_title.add_theme_font_size_override("font_size", 15)
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
     _make_button(header, "↶", _undo_part_edit).tooltip_text = "関節編集のみ取り消し"
     _make_button(header, "↷", _redo_part_edit).tooltip_text = "関節編集のみやり直し"
-    workspace_button = _make_button(header, "詳細編集", _toggle_workspace)
+    workspace_button = _make_button(header, "詳細へ", _toggle_workspace)
     workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
     _make_button(header, "ファイル", _open_file_menu)
 
@@ -262,7 +262,7 @@ func _build_interface() -> void:
     _make_button(playback, "＋", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
-    timeline_scroll.custom_minimum_size = Vector2(0, 140)
+    timeline_scroll.custom_minimum_size = Vector2(0, 112)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     # TimelineView owns drag gestures. Disable ScrollContainer's built-in
@@ -291,7 +291,7 @@ func _build_interface() -> void:
     category_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     category_stack.add_theme_constant_override("separation", 0)
     dock.add_child(category_stack)
-    for category in ["モデル", "変形", "アニメ", "カメラ"]:
+    for category in ["素材", "変形", "動き", "撮影", "出力"]:
         var nav_button := _make_button(category_nav, category, _select_category.bind(category))
         nav_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         nav_button.custom_minimum_size = Vector2(0, 48)
@@ -303,19 +303,32 @@ func _build_interface() -> void:
         page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         page.add_theme_constant_override("separation", 4)
         category_stack.add_child(page)
+        var page_description := Label.new()
+        page_description.text = {
+            "素材": "読み込み・選択・部位の階層",
+            "変形": "位置・回転・大きさ・キーフレーム",
+            "動き": "アニメーションの配置・再生範囲・関節",
+            "撮影": "カメラの位置・キーフレーム・カット",
+            "出力": "プロジェクトの保存とGodotへの書き出し"
+        }[category]
+        page_description.add_theme_font_size_override("font_size", 12)
+        page_description.custom_minimum_size.y = 22
+        page_description.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+        page_description.clip_text = true
+        page.add_child(page_description)
         category_pages[category] = page
 
     # Model page only imports external assets: no placeholder shapes or
     # generic add-object buttons.
-    var model_page: VBoxContainer = category_pages["モデル"]
+    var model_page: VBoxContainer = category_pages["素材"]
     var properties := _category_row(model_page)
     _category_action(properties, "BB読込", _choose_bbmodel)
     selection = _category_action(properties, "モデル選択 ▾", _toggle_picker)
     selection.custom_minimum_size.x = 98
     part_picker_button = _category_action(properties, "階層", _open_part_picker)
     part_picker_button.custom_minimum_size.x = 64
-    axis_option = _category_action(properties, "自由", _cycle_axis)
-    axis_option.custom_minimum_size.x = 74
+    var model_management := _category_row(model_page)
+    _category_action(model_management, "選択モデルを削除", _confirm_delete_model)
 
     # Transform: position/rotation/scale tools stay overlaid on the preview.
     # The numeric and keyframe actions live together in this category.
@@ -330,6 +343,8 @@ func _build_interface() -> void:
     ]:
         _category_action(nudge_row, str(action["text"]), action["call"])
     var key_row := _category_row(transform_page)
+    axis_option = _category_action(key_row, "軸：自由", _cycle_axis)
+    axis_option.tooltip_text = "X / Y / Z / 自由を切り替える"
     _category_action(key_row, "◆ キー登録", _insert_key)
     var key_hint := Label.new()
     key_hint.text = "現在の変形をタイムラインに記録"
@@ -340,7 +355,7 @@ func _build_interface() -> void:
     key_row.add_child(key_hint)
 
     # Animation: clips and partial-joint pose capture.
-    var animation_page: VBoxContainer = category_pages["アニメ"]
+    var animation_page: VBoxContainer = category_pages["動き"]
     var motion_row := _category_row(animation_page)
     motion_button = _category_action(motion_row, "＋アニメ配置", _open_motion_picker)
     motion_button.tooltip_text = "読み込んだモデルのアニメーションをタイムラインに追加"
@@ -356,12 +371,24 @@ func _build_interface() -> void:
     animation_page.add_child(animation_hint)
 
     # Camera settings stay in their category; view switching lives in preview.
-    var camera_page: VBoxContainer = category_pages["カメラ"]
+    var camera_page: VBoxContainer = category_pages["撮影"]
     var camera_row := _category_row(camera_page)
     _category_action(camera_row, "視点→撮影", _copy_editor_to_shot)
     _category_action(camera_row, "カメラ◆", _insert_camera_key)
     _category_action(camera_row, "カット編集", _open_camera_menu)
-    _select_category("モデル")
+
+    # Saving, loading and exporting are collected in their own task page;
+    # the header file menu remains a shortcut for less frequently used actions.
+    var output_page: VBoxContainer = category_pages["出力"]
+    var project_row := _category_row(output_page)
+    _category_action(project_row, "保存", _save_project)
+    _category_action(project_row, "保存済みを開く", _load_project)
+    _category_action(project_row, "新規", _confirm_new_project)
+    var export_row := _category_row(output_page)
+    _category_action(export_row, "プロジェクト出力", _choose_project_export)
+    _category_action(export_row, "Godot出力", _choose_runtime_export)
+    _category_action(export_row, "尺を変更", _show_duration_dialog)
+    _select_category("素材")
     _refresh_workspace()
 
     status_label = Label.new()
@@ -410,12 +437,12 @@ func _toggle_workspace() -> void:
     if not motion_workspace and pose_record_mode:
         _toggle_pose_record()
     _refresh_workspace()
-    _select_category("変形" if motion_workspace else "モデル")
+    _select_category("変形" if motion_workspace else "素材")
     _show_message("モーション編集: 関節とキーを編集できます" if motion_workspace else "基本編集: 配置・モーション再生・撮影")
 
 func _refresh_workspace() -> void:
     if workspace_button != null:
-        workspace_button.text = "基本画面へ" if motion_workspace else "詳細編集"
+        workspace_button.text = "基本へ" if motion_workspace else "詳細へ"
     if category_buttons.has("変形"):
         (category_buttons["変形"] as Control).visible = motion_workspace
     if pose_record_button != null:
@@ -2503,7 +2530,7 @@ func _set_numeric_transform(value: float, channel: String, axis: int) -> void:
 
 func _cycle_axis() -> void:
     axis_index = (axis_index + 1) % 4
-    axis_option.text = ["自由", "X", "Y", "Z"][axis_index]
+    axis_option.text = ["軸：自由", "軸：X", "軸：Y", "軸：Z"][axis_index]
     _update_gizmo()
 
 func _build_picker() -> void:

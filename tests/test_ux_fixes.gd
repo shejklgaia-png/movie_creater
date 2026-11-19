@@ -42,14 +42,14 @@ func _run() -> void:
     # Each action category must stay on screen, not just the startup page.
     var category_pages: Dictionary = editor.get("category_pages")
     var category_buttons: Dictionary = editor.get("category_buttons")
-    if category_pages.size() != 4 or category_buttons.size() != 4:
-        _fail("Expected four compact editing categories")
+    if category_pages.size() != 5 or category_buttons.size() != 5:
+        _fail("Expected five task-based editing categories")
         return
     for canvas in [Vector2(320, 640), Vector2(360, 800), Vector2(432, 960)]:
         editor.size = canvas
         await process_frame
         await process_frame
-        for category in ["モデル", "変形", "アニメ", "カメラ"]:
+        for category in ["素材", "変形", "動き", "撮影", "出力"]:
             editor.call("_select_category", category)
             await process_frame
             if not (category_pages[category] as Control).visible:
@@ -79,7 +79,7 @@ func _run() -> void:
                     _fail("Category %s has too-small touch target: %s, %s" % [category, visible_button.text, str(bounds)])
                     return
     editor.size = Vector2(360, 800)
-    editor.call("_select_category", "モデル")
+    editor.call("_select_category", "素材")
     await process_frame
     await process_frame
 
