@@ -29,6 +29,13 @@ var drag_original_time := 0.0
 var drag_moved := false
 var drag_start_y := 0.0
 var drag_last_y := 0.0
+# Track physical pointer motion separately from the timeline's local position.
+# Moving the ScrollContainer changes local event.position even if the finger
+# stays still, so using consecutive local coordinates creates jitter/reversal.
+var drag_pointer_offset := Vector2.ZERO
+var drag_last_position := Vector2.ZERO
+var active_touch_index := -1
+var last_touch_frame := -100
 var vertical_panning := false
 
 func set_tracks(data: Array[Dictionary]) -> void:
@@ -131,22 +138,34 @@ func _draw() -> void:
 
 func _gui_input(event: InputEvent) -> void:
     if event is InputEventScreenTouch:
-        if event.pressed:
+        if event.pressed and active_touch_index == -1:
+            active_touch_index = event.index
             _start_interaction(event.position)
-        else:
+        elif not event.pressed and event.index == active_touch_index:
             _finish_interaction(event.position)
+            active_touch_index = -1
+        last_touch_frame = Engine.get_process_frames()
         accept_event()
     elif event is InputEventScreenDrag:
-        _move_interaction(event.position)
+        if event.index == active_touch_index:
+            # event.relative is measured from actual finger movement; unlike
+            # event.position it does not jump when the track scrolls beneath it.
+            _move_interaction(event.position, event.relative, true)
         accept_event()
     elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+        # Android also synthesizes mouse events for a touch; processing both
+        # caused one gesture to be restarted or completed twice.
+        if active_touch_index != -1 or Engine.get_process_frames() - last_touch_frame <= 1:
+            accept_event()
+            return
         if event.pressed:
             _start_interaction(event.position)
         else:
             _finish_interaction(event.position)
         accept_event()
     elif event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-        _move_interaction(event.position)
+        if active_touch_index == -1 and Engine.get_process_frames() - last_touch_frame > 1:
+            _move_interaction(event.position, event.relative, true)
         accept_event()
 
 func _start_interaction(at: Vector2) -> void:
@@ -157,6 +176,8 @@ func _start_interaction(at: Vector2) -> void:
     drag_start_x = at.x
     drag_start_y = at.y
     drag_last_y = at.y
+    drag_last_position = at
+    drag_pointer_offset = Vector2.ZERO
     vertical_panning = false
     drag_moved = false
     var row := int(floorf((at.y - HEADER_HEIGHT) / ROW_HEIGHT))
@@ -189,9 +210,14 @@ func _start_interaction(at: Vector2) -> void:
                     return
     seek_requested.emit(_time_at(at.x))
 
-func _move_interaction(at: Vector2) -> void:
-    var horizontal := absf(at.x - drag_start_x)
-    var vertical := absf(at.y - drag_start_y)
+func _move_interaction(at: Vector2, physical_delta: Vector2 = Vector2.ZERO, has_physical_delta: bool = false) -> void:
+    # Tests and programmatic callers can still pass absolute local points.
+    # Real touch/mouse events use their stable relative motion exclusively.
+    var motion := physical_delta if has_physical_delta else at - drag_last_position
+    drag_last_position = at
+    drag_pointer_offset += motion
+    var horizontal := absf(drag_pointer_offset.x)
+    var vertical := absf(drag_pointer_offset.y)
     if not drag_moved and maxf(horizontal, vertical) < TOUCH_SLOP:
         return
     # Vertical gestures always scroll the track list. Never seek or move a
@@ -200,15 +226,15 @@ func _move_interaction(at: Vector2) -> void:
         vertical_panning = vertical > horizontal * 1.25
         drag_moved = true
     if vertical_panning:
-        vertical_pan_requested.emit(drag_last_y - at.y)
+        vertical_pan_requested.emit(-motion.y)
         drag_last_y = at.y
         return
     drag_last_y = at.y
     if drag_kind == "":
-        if at.x >= LEFT_MARGIN:
-            seek_requested.emit(_time_at(at.x))
+        if drag_start_x + drag_pointer_offset.x >= LEFT_MARGIN:
+            seek_requested.emit(_time_at(drag_start_x + drag_pointer_offset.x))
         return
-    var new_time := clampf(drag_original_time + (at.x - drag_start_x) * _view_span() / _time_width(), 0.0, duration)
+    var new_time := clampf(drag_original_time + drag_pointer_offset.x * _view_span() / _time_width(), 0.0, duration)
     if drag_kind == "clip":
         clip_dragged.emit(drag_id, drag_uid, new_time, false)
     elif drag_kind == "loop":
@@ -227,7 +253,7 @@ func _finish_interaction(at: Vector2) -> void:
         return
     if drag_kind == "clip" or drag_kind == "loop":
         if drag_moved:
-            var t := clampf(drag_original_time + (at.x - drag_start_x) * _view_span() / _time_width(), 0.0, duration)
+            var t := clampf(drag_original_time + drag_pointer_offset.x * _view_span() / _time_width(), 0.0, duration)
             if drag_kind == "loop":
                 loop_end_dragged.emit(drag_id, drag_uid, t, true)
             else:
@@ -235,7 +261,7 @@ func _finish_interaction(at: Vector2) -> void:
         else:
             clip_tapped.emit(drag_id, drag_uid)
     elif drag_kind == "key" and drag_moved:
-        var time_value := clampf(drag_original_time + (at.x - drag_start_x) * _view_span() / _time_width(), 0.0, duration)
+        var time_value := clampf(drag_original_time + drag_pointer_offset.x * _view_span() / _time_width(), 0.0, duration)
         key_dragged.emit(drag_id, drag_index, time_value, true)
     drag_kind = ""
     drag_id = ""
