@@ -68,6 +68,7 @@ var is_project_loading := false
 var tl_zoom_buttons: Array[Button] = []
 var tl_zoom_label: Label
 # A single compact, two-row action panel is visible at a time on phones.
+var category_panel: PanelContainer
 var category_pages: Dictionary = {}
 var category_buttons: Dictionary = {}
 var active_category := "素材"
@@ -212,6 +213,7 @@ func _build_interface() -> void:
     camera_view_button.custom_minimum_size = Vector2(125, 48)
     camera_view_button.tooltip_text = "カメラ視点へ切り替え"
     camera_view_button.focus_mode = Control.FOCUS_NONE
+    _ui_paint_button(camera_view_button, "tool", false)
 
     # Always-on modeling tools in the lower-right corner of the 3D preview.
     var overlay_row := HBoxContainer.new()
@@ -235,6 +237,7 @@ func _build_interface() -> void:
         mode_button.custom_minimum_size = Vector2(51, 46)
         mode_button.clip_text = true
         mode_button.focus_mode = Control.FOCUS_NONE
+        mode_button.toggle_mode = true
         transform_buttons.append(mode_button)
         if int(tool["mode"]) == 0:
             mode_option = mode_button
@@ -261,6 +264,7 @@ func _build_interface() -> void:
     var playback := HBoxContainer.new()
     dock.add_child(playback)
     play_button = _make_button(playback, "▶", _toggle_play)
+    _ui_paint_button(play_button, "tool", false)
     clock_label = Label.new()
     clock_label.text = "00:00.00"
     clock_label.custom_minimum_size.x = 92
@@ -297,20 +301,32 @@ func _build_interface() -> void:
 
     # Four bounded categories replace five permanently stacked toolbar rows.
     # Buttons remain 48px high; only one page consumes vertical space.
+    # Active tab and page meet directly, sharing one continuous surface.
+    var category_shell := VBoxContainer.new()
+    category_shell.name = "CategoryShell"
+    category_shell.add_theme_constant_override("separation", 0)
+    dock.add_child(category_shell)
     var category_nav := HBoxContainer.new()
-    category_nav.add_theme_constant_override("separation", 4)
-    dock.add_child(category_nav)
+    category_nav.name = "CategoryTabs"
+    category_nav.add_theme_constant_override("separation", 3)
+    category_shell.add_child(category_nav)
+    category_panel = PanelContainer.new()
+    category_panel.name = "CategoryPanel"
+    category_panel.custom_minimum_size = Vector2(0, 100)
+    category_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    category_panel.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 0, 6.0))
+    category_shell.add_child(category_panel)
     var category_stack := VBoxContainer.new()
     category_stack.name = "CategoryContent"
-    category_stack.custom_minimum_size = Vector2(0, 100)
     category_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     category_stack.add_theme_constant_override("separation", 0)
-    dock.add_child(category_stack)
+    category_panel.add_child(category_stack)
     for category in ["素材", "変形", "動き", "撮影", "出力"]:
         var nav_button := _make_button(category_nav, category, _select_category.bind(category))
         nav_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         nav_button.custom_minimum_size = Vector2(0, 48)
         nav_button.toggle_mode = true
+        nav_button.name = "CategoryTab_" + category
         nav_button.focus_mode = Control.FOCUS_NONE
         category_buttons[category] = nav_button
         var page := VBoxContainer.new()
@@ -327,6 +343,7 @@ func _build_interface() -> void:
             "出力": "プロジェクトの保存とGodotへの書き出し"
         }[category]
         page_description.add_theme_font_size_override("font_size", 12)
+        page_description.add_theme_color_override("font_color", Color("#b9d0e5"))
         page_description.custom_minimum_size.y = 22
         page_description.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
         page_description.clip_text = true
@@ -412,6 +429,7 @@ func _build_interface() -> void:
     status_label.clip_text = true
     status_label.autowrap_mode = TextServer.AUTOWRAP_OFF
     status_label.add_theme_font_size_override("font_size", 12)
+    status_label.add_theme_color_override("font_color", Color("#b5ccde"))
     dock.add_child(status_label)
     _build_picker()
     _build_clip_editor()
@@ -444,8 +462,11 @@ func _select_category(category: String) -> void:
         return
     active_category = category
     for key in category_pages:
-        (category_pages[key] as Control).visible = key == category
-        (category_buttons[key] as Button).set_pressed_no_signal(key == category)
+        var active: bool = key == category
+        (category_pages[key] as Control).visible = active
+        var tab: Button = category_buttons[key]
+        tab.set_pressed_no_signal(active)
+        _ui_paint_button(tab, "tab", active)
 
 func _toggle_workspace() -> void:
     motion_workspace = not motion_workspace
@@ -458,6 +479,7 @@ func _toggle_workspace() -> void:
 func _refresh_workspace() -> void:
     if workspace_button != null:
         workspace_button.text = "基本" if motion_workspace else "詳細"
+        _ui_paint_button(workspace_button, "tool", motion_workspace)
     if category_buttons.has("変形"):
         (category_buttons["変形"] as Control).visible = motion_workspace
     if pose_record_button != null:
@@ -1383,11 +1405,71 @@ func _close_clip_editor() -> void:
     editing_clip_model = ""
     editing_clip_uid = ""
 
+# Shared design tokens and button states. All controls retain >=44px targets.
+func _ui_box(fill: Color, radius: int = 7, padding: float = 7.0) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = fill
+    style.set_corner_radius_all(radius)
+    style.set_content_margin(SIDE_LEFT, padding)
+    style.set_content_margin(SIDE_RIGHT, padding)
+    style.set_content_margin(SIDE_TOP, 4.0)
+    style.set_content_margin(SIDE_BOTTOM, 4.0)
+    return style
+
+func _ui_paint_button(button: Button, role: String = "action", selected: bool = false) -> void:
+    var fill := Color("#32475d")
+    var foreground := Color("#edf5ff")
+    if role == "tab":
+        fill = Color("#26374b") if selected else Color("#172332")
+        foreground = Color("#f5fbff") if selected else Color("#9bafc4")
+    elif role == "tool":
+        fill = Color("#315a73") if selected else Color("#28394e")
+        foreground = Color("#f3fcff") if selected else Color("#cad9e9")
+    elif role == "item":
+        fill = Color("#31546b") if selected else Color("#28394c")
+        foreground = Color("#ffffff") if selected else Color("#c6d9ea")
+    elif role == "danger":
+        fill = Color("#573b47")
+        foreground = Color("#ffdee0")
+    var normal := _ui_box(fill, 0 if role == "tab" else 7, 5.0 if role == "tab" else 7.0)
+    if role == "tab":
+        normal.corner_radius_top_left = 7
+        normal.corner_radius_top_right = 7
+        if selected:
+            normal.border_width_top = 3
+            normal.border_color = Color("#6cbeed")
+    elif selected and (role == "tool" or role == "item"):
+        normal.border_width_left = 3
+        normal.border_color = Color("#6cc5ef")
+    button.add_theme_stylebox_override("normal", normal)
+    button.add_theme_stylebox_override("pressed", normal.duplicate())
+    button.add_theme_stylebox_override("hover_pressed", normal.duplicate())
+    var hover := normal.duplicate() as StyleBoxFlat
+    if role != "tab":
+        hover.bg_color = fill.lightened(0.12)
+    button.add_theme_stylebox_override("hover", hover)
+    button.add_theme_stylebox_override("disabled", _ui_box(Color("#202c3b"), 7))
+    button.add_theme_color_override("font_color", foreground)
+    button.add_theme_color_override("font_hover_color", foreground)
+    button.add_theme_color_override("font_pressed_color", foreground)
+    button.add_theme_color_override("font_hover_pressed_color", foreground)
+    button.add_theme_color_override("font_disabled_color", Color("#7b8fa2"))
+    button.add_theme_font_size_override("font_size", 14)
+
+func _ui_style_sheet(panel: PanelContainer) -> void:
+    var surface := _ui_box(Color("#27394f"), 10, 12.0)
+    surface.border_color = Color("#506b86")
+    surface.border_width_top = 1
+    surface.border_width_bottom = 1
+    panel.add_theme_stylebox_override("panel", surface)
+
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
     button.text = title
     button.custom_minimum_size = Vector2(48, 48)
     button.clip_text = true
+    button.focus_mode = Control.FOCUS_NONE
+    _ui_paint_button(button)
     button.pressed.connect(action)
     parent.add_child(button)
     return button
