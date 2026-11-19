@@ -41,6 +41,7 @@ var edit_view_snapshot: Dictionary = {}
 var clip_tracks: Dictionary = {}
 var next_clip_id := 1
 var timeline_scroll: ScrollContainer
+var timeline_scroll_fraction := 0.0
 var camera_view_button: Button
 var timeline: Control
 var clock_label: Label
@@ -264,6 +265,10 @@ func _build_interface() -> void:
     timeline_scroll.custom_minimum_size = Vector2(0, 140)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    # TimelineView owns drag gestures. Disable ScrollContainer's built-in
+    # touch drag to prevent two scrollers from fighting for the same swipe.
+    # Wheel / scrollbar scrolling remain available on desktop.
+    timeline_scroll.scroll_deadzone = 100000
     dock.add_child(timeline_scroll)
     timeline = TimelineView.new()
     timeline.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -426,14 +431,14 @@ func _change_timeline_zoom(direction: int) -> void:
 func _timeline_vertical_pan(pixels: float) -> void:
     if timeline_scroll == null:
         return
-    # Imported/changed tracks may enlarge the timeline before Container's
-    # deferred sort has updated its scrollbar. Keep immediate touch scrolling
-    # responsive by synchronizing the range with the visible viewport.
+    # Never rewrite the scrollbar range during a drag: Container layout will
+    # overwrite that range and snap the content, producing a visible jerk.
+    # Preserve subpixel motion while displaying integer scroll coordinates.
     var scroll_bar := timeline_scroll.get_v_scroll_bar()
-    if timeline != null and timeline.custom_minimum_size.y > timeline_scroll.size.y:
-        scroll_bar.max_value = maxf(scroll_bar.max_value, timeline.custom_minimum_size.y)
-        scroll_bar.page = maxf(1.0, timeline_scroll.size.y)
-    timeline_scroll.scroll_vertical = maxi(0, timeline_scroll.scroll_vertical + roundi(pixels))
+    var scroll_limit := maxf(0.0, scroll_bar.max_value - scroll_bar.page)
+    var next_scroll := clampf(float(timeline_scroll.scroll_vertical) + timeline_scroll_fraction + pixels, 0.0, scroll_limit)
+    timeline_scroll.scroll_vertical = roundi(next_scroll)
+    timeline_scroll_fraction = next_scroll - float(timeline_scroll.scroll_vertical)
 
 func _build_file_menu() -> void:
     file_menu = PopupPanel.new()
