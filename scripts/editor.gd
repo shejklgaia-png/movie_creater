@@ -64,6 +64,10 @@ var autosave_timer: Timer
 var is_project_loading := false
 var tl_zoom_buttons: Array[Button] = []
 var tl_zoom_label: Label
+# A single compact, two-row action panel is visible at a time on phones.
+var category_pages: Dictionary = {}
+var category_buttons: Dictionary = {}
+var active_category := "モデル"
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
@@ -158,7 +162,7 @@ func _build_interface() -> void:
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-    preview_panel.custom_minimum_size = Vector2(0, 230)
+    preview_panel.custom_minimum_size = Vector2(0, 180)
     layout.add_child(preview_panel)
     preview_box = SubViewportContainer.new()
     preview_box.stretch = true
@@ -237,7 +241,7 @@ func _build_interface() -> void:
     _make_button(playback, "＋", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
-    timeline_scroll.custom_minimum_size = Vector2(0, 152)
+    timeline_scroll.custom_minimum_size = Vector2(0, 140)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     dock.add_child(timeline_scroll)
@@ -250,45 +254,49 @@ func _build_interface() -> void:
     timeline.clip_dragged.connect(_timeline_bar_dragged)
     timeline.vertical_pan_requested.connect(_timeline_vertical_pan)
 
-    var add_row := HBoxContainer.new()
-    dock.add_child(add_row)
-    _make_button(add_row, "＋箱", func(): _add_object("box"))
-    _make_button(add_row, "＋球", func(): _add_object("sphere"))
-    _make_button(add_row, "BB読込", _choose_bbmodel)
-    _make_button(add_row, "◆ キー登録", _insert_key)
-    var camera_row := HBoxContainer.new()
-    dock.add_child(camera_row)
-    camera_view_button = _make_button(camera_row, "編集視点", _toggle_camera_view)
-    camera_view_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    _make_button(camera_row, "視点→撮影", _copy_editor_to_shot)
-    _make_button(camera_row, "カメラ◆", _insert_camera_key)
-    _make_button(camera_row, "カット", _open_camera_menu)
-    var motion_row := HBoxContainer.new()
-    dock.add_child(motion_row)
-    motion_button = _make_button(motion_row, "＋アニメを配置", _open_motion_picker)
-    motion_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    motion_button.clip_text = true
-    motion_button.custom_minimum_size.x = 0
-    motion_button.tooltip_text = "読み込んだモデルのアニメーションを切り替え"
-    pose_record_button = _make_button(motion_row, "◆ポーズOFF", _toggle_pose_record)
-    pose_record_button.custom_minimum_size = Vector2(112, 48)
-    pose_record_button.clip_text = true
-    pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
+    # Four bounded categories replace five permanently stacked toolbar rows.
+    # Buttons remain 48px high; only one page consumes vertical space.
+    var category_nav := HBoxContainer.new()
+    category_nav.add_theme_constant_override("separation", 4)
+    dock.add_child(category_nav)
+    var category_stack := VBoxContainer.new()
+    category_stack.name = "CategoryContent"
+    category_stack.custom_minimum_size = Vector2(0, 100)
+    category_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    category_stack.add_theme_constant_override("separation", 0)
+    dock.add_child(category_stack)
+    for category in ["モデル", "変形", "アニメ", "カメラ"]:
+        var nav_button := _make_button(category_nav, category, _select_category.bind(category))
+        nav_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        nav_button.custom_minimum_size = Vector2(0, 48)
+        nav_button.toggle_mode = true
+        nav_button.focus_mode = Control.FOCUS_NONE
+        category_buttons[category] = nav_button
+        var page := VBoxContainer.new()
+        page.name = category
+        page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        page.add_theme_constant_override("separation", 4)
+        category_stack.add_child(page)
+        category_pages[category] = page
 
-    var properties := HBoxContainer.new()
-    dock.add_child(properties)
-    selection = _make_button(properties, "モデル選択 ▾", _toggle_picker)
-    selection.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    selection.clip_text = true
-    selection.custom_minimum_size = Vector2(98, 46)
-    part_picker_button = _make_button(properties, "階層", _open_part_picker)
-    part_picker_button.custom_minimum_size = Vector2(64, 46)
-    axis_option = _make_button(properties, "自由", _cycle_axis)
-    axis_option.custom_minimum_size = Vector2(74, 46)
-    axis_option.clip_text = true
+    # Model: creating/importing objects, selecting a model, and choosing joints.
+    var model_page: VBoxContainer = category_pages["モデル"]
+    var add_row := _category_row(model_page)
+    _category_action(add_row, "＋箱", func(): _add_object("box"))
+    _category_action(add_row, "＋球", func(): _add_object("sphere"))
+    _category_action(add_row, "BB読込", _choose_bbmodel)
+    var properties := _category_row(model_page)
+    selection = _category_action(properties, "モデル選択 ▾", _toggle_picker)
+    selection.custom_minimum_size.x = 98
+    part_picker_button = _category_action(properties, "階層", _open_part_picker)
+    part_picker_button.custom_minimum_size.x = 64
+    axis_option = _category_action(properties, "自由", _cycle_axis)
+    axis_option.custom_minimum_size.x = 74
 
-    var nudge_row := HBoxContainer.new()
-    dock.add_child(nudge_row)
+    # Transform: position/rotation/scale tools stay overlaid on the preview.
+    # The numeric and keyframe actions live together in this category.
+    var transform_page: VBoxContainer = category_pages["変形"]
+    var nudge_row := _category_row(transform_page)
     for action in [
         {"text":"－", "call":func(): _nudge(-1.0)},
         {"text":"＋", "call":func(): _nudge(1.0)},
@@ -296,9 +304,42 @@ func _build_interface() -> void:
         {"text":"戻す", "call":_reset_selected_transform},
         {"text":"数値", "call":_open_transform_inspector}
     ]:
-        var button := _make_button(nudge_row, str(action["text"]), action["call"])
-        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-        button.custom_minimum_size.x = 0
+        _category_action(nudge_row, str(action["text"]), action["call"])
+    var key_row := _category_row(transform_page)
+    _category_action(key_row, "◆ キー登録", _insert_key)
+    var key_hint := Label.new()
+    key_hint.text = "現在の変形をタイムラインに記録"
+    key_hint.clip_text = true
+    key_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    key_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    key_hint.add_theme_font_size_override("font_size", 12)
+    key_row.add_child(key_hint)
+
+    # Animation: clips and partial-joint pose capture.
+    var animation_page: VBoxContainer = category_pages["アニメ"]
+    var motion_row := _category_row(animation_page)
+    motion_button = _category_action(motion_row, "＋アニメ配置", _open_motion_picker)
+    motion_button.tooltip_text = "読み込んだモデルのアニメーションをタイムラインに追加"
+    pose_record_button = _category_action(motion_row, "◆ポーズOFF", _toggle_pose_record)
+    pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
+    var animation_hint := Label.new()
+    animation_hint.text = "バーをタップして再生範囲・使用関節を編集"
+    animation_hint.clip_text = true
+    animation_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    animation_hint.custom_minimum_size.y = 48
+    animation_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    animation_hint.add_theme_font_size_override("font_size", 12)
+    animation_page.add_child(animation_hint)
+
+    # Camera: view control on one row, cut/key editing on the next.
+    var camera_page: VBoxContainer = category_pages["カメラ"]
+    var camera_view_row := _category_row(camera_page)
+    camera_view_button = _category_action(camera_view_row, "編集視点", _toggle_camera_view)
+    _category_action(camera_view_row, "視点→撮影", _copy_editor_to_shot)
+    var camera_key_row := _category_row(camera_page)
+    _category_action(camera_key_row, "カメラ◆", _insert_camera_key)
+    _category_action(camera_key_row, "カット編集", _open_camera_menu)
+    _select_category("モデル")
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -317,6 +358,29 @@ func _build_interface() -> void:
     autosave_timer.wait_time = 20.0
     autosave_timer.timeout.connect(_autosave_project)
     add_child(autosave_timer)
+
+func _category_row(page: Control) -> HBoxContainer:
+    var row := HBoxContainer.new()
+    row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    row.add_theme_constant_override("separation", 4)
+    page.add_child(row)
+    return row
+
+func _category_action(row: Control, title: String, action: Callable) -> Button:
+    var button := _make_button(row, title, action)
+    button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    button.custom_minimum_size = Vector2(0, 48)
+    button.clip_text = true
+    button.focus_mode = Control.FOCUS_NONE
+    return button
+
+func _select_category(category: String) -> void:
+    if not category_pages.has(category):
+        return
+    active_category = category
+    for key in category_pages:
+        (category_pages[key] as Control).visible = key == category
+        (category_buttons[key] as Button).set_pressed_no_signal(key == category)
 
 func _change_timeline_zoom(direction: int) -> void:
     if timeline == null:
