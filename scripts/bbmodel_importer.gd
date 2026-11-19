@@ -74,6 +74,20 @@ func import_text(source: String) -> Dictionary:
     if _cubes_created + _meshes_created == 0:
         root.free()
         return {"ok": false, "error": "表示できる形状がありません（未対応の要素形式か空のモデルです）"}
+    # Keep a serializable folder/joint manifest separate from live Node3D
+    # references, so reloading a saved movie restores stable original pivots.
+    var joint_hierarchy: Dictionary = {}
+    for uuid_value in _group_states.keys():
+        var group_id := str(uuid_value)
+        var state: Dictionary = _group_states[group_id]
+        var bone: Node3D = state["node"]
+        joint_hierarchy[group_id] = {
+            "name": str(bone.name),
+            "uuid": group_id,
+            "parent_uuid": str(bone.get_meta("bb_parent_joint_uuid", "")),
+            "origin": bone.get_meta("bb_joint_origin", [0, 0, 0]),
+            "path": str(root.get_path_to(bone))
+        }
     var clips: Array = []
     for animation_value in document.get("animations", []):
         if animation_value is Dictionary:
@@ -82,7 +96,7 @@ func import_text(source: String) -> Dictionary:
             _check_animation_features(anim)
     return {
         "ok": true, "root": root, "model_name": str(document.get("name", "")),
-        "groups": _group_states.duplicate(),
+        "groups": _group_states.duplicate(), "joints": joint_hierarchy,
         "animations": clips, "warnings": warnings.duplicate(),
         "cubes": _cubes_created, "meshes": _meshes_created,
         "triangles": _triangles_created, "textures": _materials.size()
@@ -183,6 +197,12 @@ func _build_outliner(entry: Variant, parent: Node3D, parent_origin: Vector3) -> 
     node.position = (origin - parent_origin) * UNIT
     node.rotation_degrees = _to_vec(group.get("rotation", [0, 0, 0]))
     node.visible = bool(group.get("visibility", true))
+    # A Blockbench outliner folder is a rigid joint, not just a UI label.
+    # Its origin is the exact hinge (BB pixel coordinates), and all nested
+    # folders/meshes are descendants, so rotating this node bends its limb.
+    node.set_meta("bb_joint_uuid", id)
+    node.set_meta("bb_parent_joint_uuid", str(parent.get_meta("bb_joint_uuid", "")))
+    node.set_meta("bb_joint_origin", group.get("origin", [0, 0, 0]))
     parent.add_child(node)
     if not id.is_empty():
         _group_states[id] = {
