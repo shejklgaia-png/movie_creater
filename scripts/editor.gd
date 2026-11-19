@@ -70,6 +70,8 @@ var tl_zoom_label: Label
 var category_pages: Dictionary = {}
 var category_buttons: Dictionary = {}
 var active_category := "モデル"
+var motion_workspace := false
+var workspace_button: Button
 var bb_assets: Dictionary = {}
 var picker_overlay: Control
 var picker_list: VBoxContainer
@@ -79,6 +81,9 @@ var clip_overlay: Control
 var clip_title: Label
 var clip_fields: Dictionary = {}
 var clip_bone_list: VBoxContainer
+var clip_scope_controls: VBoxContainer
+var clip_limit_check: CheckBox
+var clip_loop_check: CheckBox
 var editing_clip_model := ""
 var editing_clip_uid := ""
 var mode_index := 0
@@ -158,6 +163,8 @@ func _build_interface() -> void:
     header.add_child(app_title)
     _make_button(header, "↶", _undo_part_edit).tooltip_text = "関節編集のみ取り消し"
     _make_button(header, "↷", _redo_part_edit).tooltip_text = "関節編集のみやり直し"
+    workspace_button = _make_button(header, "詳細編集", _toggle_workspace)
+    workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
     _make_button(header, "ファイル", _open_file_menu)
 
     preview_panel = Control.new()
@@ -265,6 +272,7 @@ func _build_interface() -> void:
     timeline.key_dragged.connect(_on_key_dragged)
     timeline.clip_tapped.connect(_timeline_bar_tapped)
     timeline.clip_dragged.connect(_timeline_bar_dragged)
+    timeline.loop_end_dragged.connect(_on_loop_end_dragged)
     timeline.vertical_pan_requested.connect(_timeline_vertical_pan)
 
     # Four bounded categories replace five permanently stacked toolbar rows.
@@ -349,6 +357,7 @@ func _build_interface() -> void:
     _category_action(camera_row, "カメラ◆", _insert_camera_key)
     _category_action(camera_row, "カット編集", _open_camera_menu)
     _select_category("モデル")
+    _refresh_workspace()
 
     status_label = Label.new()
     status_label.custom_minimum_size = Vector2(0, 24)
@@ -390,6 +399,22 @@ func _select_category(category: String) -> void:
     for key in category_pages:
         (category_pages[key] as Control).visible = key == category
         (category_buttons[key] as Button).set_pressed_no_signal(key == category)
+
+func _toggle_workspace() -> void:
+    motion_workspace = not motion_workspace
+    if not motion_workspace and pose_record_mode:
+        _toggle_pose_record()
+    _refresh_workspace()
+    _select_category("変形" if motion_workspace else "モデル")
+    _show_message("モーション編集: 関節とキーを編集できます" if motion_workspace else "基本編集: 配置・モーション再生・撮影")
+
+func _refresh_workspace() -> void:
+    if workspace_button != null:
+        workspace_button.text = "基本画面へ" if motion_workspace else "詳細編集"
+    if category_buttons.has("変形"):
+        (category_buttons["変形"] as Control).visible = motion_workspace
+    if pose_record_button != null:
+        pose_record_button.visible = motion_workspace
 
 func _change_timeline_zoom(direction: int) -> void:
     if timeline == null:
@@ -929,7 +954,7 @@ func _sample_bb_animations() -> void:
             continue
         var source_time := ClipEngine.source_time(active, current_time)
         sampler.apply_clip(asset["groups"], available[source_index], source_time,
-            bool(asset["old_format"]), active.get("enabled_groups", null))
+            bool(asset["old_format"]), active.get("enabled_groups", null) if bool(active.get("limit_bones", false)) else null)
 
 func _animation_duration(source: Dictionary) -> float:
     var declared := float(source.get("length", 0.0))
@@ -981,7 +1006,27 @@ func _on_clip_dragged(model_id: String, uid: String, at: float, finished: bool) 
     _set_playing(false)
     var rows: Array = clip_tracks[model_id]
     var clip: Dictionary = rows[index]
+    var previous_start := float(clip.get("start", 0.0))
     clip["start"] = snappedf(clampf(at, 0.0, maxf(0.0, DURATION - ClipEngine.clip_length(clip))), 0.01)
+    if bool(clip.get("loop", false)):
+        clip["loop_end"] = minf(DURATION, float(clip.get("loop_end", previous_start + ClipEngine.source_span(clip))) + float(clip["start"]) - previous_start)
+    rows[index] = clip
+    clip_tracks[model_id] = rows
+    _refresh_timeline()
+    _seek(current_time)
+    if finished:
+        _mark_dirty()
+
+func _on_loop_end_dragged(model_id: String, uid: String, seconds: float, finished: bool) -> void:
+    var index := _find_clip_index(model_id, uid)
+    if index < 0:
+        return
+    var rows: Array = clip_tracks[model_id]
+    var clip: Dictionary = rows[index]
+    if not bool(clip.get("loop", false)):
+        return
+    _set_playing(false)
+    clip["loop_end"] = ClipEngine.snap_loop_end(clip, seconds, DURATION)
     rows[index] = clip
     clip_tracks[model_id] = rows
     _refresh_timeline()
@@ -1074,19 +1119,36 @@ func _build_clip_editor() -> void:
         number.value_changed.connect(_update_clip_field.bind(str(field["key"])))
         row.add_child(number)
         clip_fields[str(field["key"])] = number
+    clip_loop_check = CheckBox.new()
+    clip_loop_check.text = "アニメーションをループする"
+    clip_loop_check.custom_minimum_size.y = 50.0
+    clip_loop_check.toggled.connect(_toggle_clip_loop)
+    settings.add_child(clip_loop_check)
+    var loop_hint := Label.new()
+    loop_hint.text = "TL上の↻をドラッグすると、動作の終点でスナップしてループ回数を調整します"
+    loop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    settings.add_child(loop_hint)
+    clip_limit_check = CheckBox.new()
+    clip_limit_check.text = "再生する関節を限定する"
+    clip_limit_check.custom_minimum_size.y = 50.0
+    clip_limit_check.toggled.connect(_toggle_clip_joint_limit)
+    settings.add_child(clip_limit_check)
+    clip_scope_controls = VBoxContainer.new()
+    settings.add_child(clip_scope_controls)
     var explanation := Label.new()
-    explanation.text = "有効な関節だけにモーションを適用します"
+    explanation.text = "選択した関節と、その子関節だけにモーションを適用します"
     explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    settings.add_child(explanation)
+    clip_scope_controls.add_child(explanation)
     var toolbar := HBoxContainer.new()
-    settings.add_child(toolbar)
+    clip_scope_controls.add_child(toolbar)
     _make_button(toolbar, "全関節ON", func(): _set_all_bones(true))
     _make_button(toolbar, "全関節OFF", func(): _set_all_bones(false))
     var caption := Label.new()
     caption.text = "関節一覧（親を選ぶと子も変更）"
-    settings.add_child(caption)
+    clip_scope_controls.add_child(caption)
     clip_bone_list = VBoxContainer.new()
-    settings.add_child(clip_bone_list)
+    clip_scope_controls.add_child(clip_bone_list)
+    clip_scope_controls.hide()
     _make_button(layout, "このクリップを削除", _delete_editing_clip)
     clip_overlay.hide()
 
@@ -1108,6 +1170,9 @@ func _open_clip_editor(model_id: String, uid: String) -> void:
     for field_name in ["start", "in", "out", "speed"]:
         var control: SpinBox = clip_fields[field_name]
         control.set_value_no_signal(float(active.get(field_name, 0.0)))
+    clip_loop_check.set_pressed_no_signal(bool(active.get("loop", false)))
+    clip_limit_check.set_pressed_no_signal(bool(active.get("limit_bones", false)))
+    clip_scope_controls.visible = clip_limit_check.button_pressed
     var source_duration := _animation_duration(animation)
     (clip_fields["in"] as SpinBox).max_value = source_duration
     (clip_fields["out"] as SpinBox).max_value = source_duration
@@ -1127,6 +1192,27 @@ func _open_clip_editor(model_id: String, uid: String) -> void:
         label.toggled.connect(_toggle_clip_bone.bind(model_id, uid, group_id))
         clip_bone_list.add_child(label)
     clip_overlay.show()
+
+func _toggle_clip_loop(enabled: bool) -> void:
+    var clip := _current_edit_clip()
+    if clip.is_empty():
+        return
+    clip["loop"] = enabled
+    if enabled:
+        # Default to two complete cycles, limited by the movie duration.
+        var start := float(clip.get("start", 0.0))
+        var cycle := ClipEngine.source_span(clip)
+        clip["loop_end"] = ClipEngine.snap_loop_end(clip, start + 2.0 * cycle, DURATION)
+    _save_edit_clip(clip)
+
+func _toggle_clip_joint_limit(enabled: bool) -> void:
+    if clip_scope_controls != null:
+        clip_scope_controls.visible = enabled
+    var clip := _current_edit_clip()
+    if clip.is_empty():
+        return
+    clip["limit_bones"] = enabled
+    _save_edit_clip(clip)
 
 func _current_edit_clip() -> Dictionary:
     var index := _find_clip_index(editing_clip_model, editing_clip_uid)
@@ -2699,7 +2785,9 @@ func _refresh_timeline() -> void:
                     "uid": str(bar.get("uid", "")),
                     "start": float(bar.get("start", 0.0)),
                     "end": ClipEngine.end_time(bar),
-                    "label": _short_text(str(animations[which].get("name", "Motion")), 12)
+                    "label": _short_text(str(animations[which].get("name", "Motion")), 12),
+                    "loop": bool(bar.get("loop", false)),
+                    "cycle": ClipEngine.source_span(bar)
                 })
             rows.append({"id": id, "kind": "clips", "label": "↳動作", "clips": bars})
     if selected_part_model == selected_id and not selected_part_path.is_empty() and objects_by_id.has(selected_id):
@@ -2742,7 +2830,7 @@ func _serialize_project() -> Dictionary:
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
-    return {"version": 5, "duration": DURATION,
+    return {"version": 6, "duration": DURATION,
         "camera_keys": camera_keys.duplicate(true),
         "camera_tracks": camera_tracks.duplicate(true),
         "camera_cuts": camera_cuts.duplicate(true),
@@ -2872,6 +2960,9 @@ func _load_project() -> void:
                     continue
                 var safe: Dictionary = ClipEngine.validate(stored,
                     _animation_duration(clips[animation_index]), DURATION)
+                # Earlier projects only stored the list, without the opt-in switch.
+                if not stored.has("limit_bones") and stored.get("enabled_groups", null) is Array:
+                    safe["limit_bones"] = (stored["enabled_groups"] as Array).size() < (bb_assets[id]["groups"] as Dictionary).size()
                 if not (safe.get("enabled_groups", null) is Array):
                     var all_groups: Array = []
                     for uuid in (bb_assets[id]["groups"] as Dictionary).keys():
