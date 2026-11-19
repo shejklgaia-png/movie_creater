@@ -153,20 +153,35 @@ func _build_interface() -> void:
     layout.clip_contents = true
     add_child(layout)
 
+    # Header buttons must fit a 320px Android portrait viewport without
+    # squeezing the title outside the left edge or hiding the file menu.
     var header := HBoxContainer.new()
     header.custom_minimum_size.y = 54
+    header.add_theme_constant_override("separation", 2)
     layout.add_child(header)
     var app_title := Label.new()
+    app_title.name = "AppTitle"
     app_title.text = "ムークリ"
+    app_title.custom_minimum_size.x = 62.0
+    app_title.clip_text = true
     app_title.add_theme_font_size_override("font_size", 15)
     app_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     app_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     header.add_child(app_title)
-    _make_button(header, "↶", _undo_part_edit).tooltip_text = "関節編集のみ取り消し"
-    _make_button(header, "↷", _redo_part_edit).tooltip_text = "関節編集のみやり直し"
-    workspace_button = _make_button(header, "詳細へ", _toggle_workspace)
+    var undo_button := _make_button(header, "↶", _undo_part_edit)
+    undo_button.custom_minimum_size = Vector2(44, 48)
+    undo_button.tooltip_text = "関節編集のみ取り消し"
+    var redo_button := _make_button(header, "↷", _redo_part_edit)
+    redo_button.custom_minimum_size = Vector2(44, 48)
+    redo_button.tooltip_text = "関節編集のみやり直し"
+    workspace_button = _make_button(header, "詳細", _toggle_workspace)
+    workspace_button.custom_minimum_size = Vector2(52, 48)
+    workspace_button.add_theme_font_size_override("font_size", 13)
     workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
-    _make_button(header, "ファイル", _open_file_menu)
+    var file_button := _make_button(header, "≡", _open_file_menu)
+    file_button.name = "FileMenuButton"
+    file_button.custom_minimum_size = Vector2(44, 48)
+    file_button.tooltip_text = "ファイル・保存・読み込み"
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -258,8 +273,8 @@ func _build_interface() -> void:
     time_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     time_slider.value_changed.connect(_seek)
     playback.add_child(time_slider)
-    _make_button(playback, "－", func(): _change_timeline_zoom(-1))
-    _make_button(playback, "＋", func(): _change_timeline_zoom(1))
+    _make_button(playback, "-", func(): _change_timeline_zoom(-1))
+    _make_button(playback, "+", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
     timeline_scroll.custom_minimum_size = Vector2(0, 112)
@@ -442,7 +457,7 @@ func _toggle_workspace() -> void:
 
 func _refresh_workspace() -> void:
     if workspace_button != null:
-        workspace_button.text = "基本へ" if motion_workspace else "詳細へ"
+        workspace_button.text = "基本" if motion_workspace else "詳細"
     if category_buttons.has("変形"):
         (category_buttons["変形"] as Control).visible = motion_workspace
     if pose_record_button != null:
@@ -559,7 +574,9 @@ func _new_project() -> void:
     next_id = 1
     next_clip_id = 1
     DURATION = 15.0
-    timeline.zoom = 1.0
+    # New/opened projects use a 5-second readable window; the remainder is
+    # reachable by horizontal timeline swipes and zoom controls.
+    timeline.zoom = maxf(1.0, DURATION / 5.0)
     timeline.view_start = 0.0
     time_slider.max_value = DURATION
     timeline.duration = DURATION
@@ -2908,7 +2925,9 @@ func _load_project() -> void:
     DURATION = clampf(float(parsed.get("duration", 15.0)), 1.0, 600.0)
     time_slider.max_value = DURATION
     timeline.duration = DURATION
-    timeline.zoom = 1.0
+    # New/opened projects use a 5-second readable window; the remainder is
+    # reachable by horizontal timeline swipes and zoom controls.
+    timeline.zoom = maxf(1.0, DURATION / 5.0)
     timeline.view_start = 0.0
     for node in objects_by_id.values():
         (node as Node3D).queue_free()
