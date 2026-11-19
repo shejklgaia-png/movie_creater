@@ -937,7 +937,8 @@ func _import_bbmodel_text(source: String, filename: String = "Blockbench") -> bo
     tracks[id] = [_capture_key(node, 0.0)]
     var clips: Array = result.get("animations", [])
     bb_assets[id] = {
-        "source": source, "groups": result["groups"], "clips": clips,
+        "source": source, "groups": result["groups"],
+        "joints": result.get("joints", {}), "clips": clips,
         "clip_index": 0 if not clips.is_empty() else -1,
         "old_format": int(str(node.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
     }
@@ -2216,12 +2217,28 @@ func _get_selected_target() -> Node3D:
             return part
     return root_node
 
+# Find the nearest Blockbench group/folder above a picked mesh element.
+# The group node is at the original Blockbench origin (rotation hinge), while
+# mesh origins are only geometry pivots and must not become limb joints.
+func _joint_path_for_part(model_id: String, path: String) -> String:
+    if path.is_empty() or not objects_by_id.has(model_id) or not bb_assets.has(model_id):
+        return path
+    var model: Node3D = objects_by_id[model_id]
+    var current: Node = model.get_node_or_null(NodePath(path))
+    while current != null and current != model:
+        if current is Node3D and current.has_meta("bb_joint_uuid"):
+            return str(model.get_path_to(current))
+        current = current.get_parent()
+    return path
+
 func _set_part_selection(model_id: String, path: String) -> void:
     if not objects_by_id.has(model_id):
         return
     selected_id = model_id
     selected_part_model = model_id
-    selected_part_path = path
+    # Rotation of a visible mesh bends the nearest owning folder joint.
+    # Move/scale/select retain the explicit mesh element for precise editing.
+    selected_part_path = _joint_path_for_part(model_id, path) if mode_index == 1 else path
     _set_selection(model_id)
     _update_gizmo()
     _refresh_timeline()
@@ -2270,6 +2287,11 @@ func _update_gizmo() -> void:
 
 func _set_transform_mode(tool: int) -> void:
     mode_index = tool
+    if tool == 1 and selected_part_model == selected_id and not selected_part_path.is_empty():
+        # A mesh may have been chosen in move/selection mode before switching
+        # to rotate. Resolve it to its owning articulated joint immediately.
+        selected_part_path = _joint_path_for_part(selected_id, selected_part_path)
+        _refresh_timeline()
     for index in range(transform_buttons.size()):
         var button: Button = transform_buttons[index]
         var button_mode: int = [3, 0, 1, 2][index]
@@ -2283,7 +2305,7 @@ func _open_part_picker() -> void:
         _show_message("先にモデルを選択してください")
         return
     picker_mode = "part"
-    picker_title.text = "階層・パーツを選択"
+    picker_title.text = "階層・関節を選択"
     for child in picker_list.get_children():
         picker_list.remove_child(child)
         child.queue_free()
@@ -2308,7 +2330,9 @@ func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
         var part: Node3D = child
         var path := str(root_node.get_path_to(part))
         var button := Button.new()
-        button.text = ("  ".repeat(mini(depth, 6))) + _short_text(part.name, 23)
+        var is_joint: bool = part.has_meta("bb_joint_uuid")
+        var type_label := "◈関節 " if is_joint else "□部品 "
+        button.text = ("  ".repeat(mini(depth, 6))) + type_label + _short_text(part.name, 18)
         button.custom_minimum_size.y = 46
         button.clip_text = true
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -3049,6 +3073,7 @@ func _serialize_project() -> Dictionary:
             "element_offsets": element_offsets.get(id, {}).duplicate(true),
             "part_pose_tracks": part_pose_tracks.get(id, {}).duplicate(true),
             "bb_source": str(bb_assets[id]["source"]) if bb_assets.has(id) else "",
+            "joint_hierarchy": (bb_assets[id].get("joints", {}) as Dictionary).duplicate(true) if bb_assets.has(id) else {},
             "bb_clip_index": int(bb_assets[id]["clip_index"]) if bb_assets.has(id) else -1
         })
     return {"version": 6, "duration": DURATION,
@@ -3147,7 +3172,8 @@ func _load_project() -> void:
             objects_by_id[id] = model
             var clips: Array = bb_result.get("animations", [])
             bb_assets[id] = {
-                "source": source, "groups": bb_result["groups"], "clips": clips,
+                "source": source, "groups": bb_result["groups"],
+                "joints": bb_result.get("joints", {}), "clips": clips,
                 "clip_index": clampi(int(record.get("bb_clip_index", -1)), -1, clips.size() - 1),
                 "old_format": int(str(model.get_meta("bb_format", "5")).get_slice(".", 0)) < 5
             }
