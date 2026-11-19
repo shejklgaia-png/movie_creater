@@ -44,7 +44,50 @@ func _run() -> void:
         return
     var clip: Dictionary = rows[0]
     var uid := str(clip.get("uid", ""))
+    # A newly imported (non-looping) animation must still show a loop handle.
+    var timeline: Control = editor.get("timeline")
+    var animation_row := -1
+    var animation_bar: Dictionary = {}
+    for track_index in range((timeline.get("tracks") as Array).size()):
+        var row: Dictionary = (timeline.get("tracks") as Array)[track_index]
+        if str(row.get("id", "")) != model_id or str(row.get("kind", "")) != "clips":
+            continue
+        animation_row = track_index
+        for candidate in row.get("clips", []):
+            if str(candidate.get("uid", "")) == uid:
+                animation_bar = candidate
+                break
+    if animation_row < 0 or bool(clip.get("loop", false)) or not bool(animation_bar.get("loop_handle", false)):
+        _fail("New animation bar does not advertise a loop grip before activation")
+        return
+    if not bool(timeline.call("_has_loop_grip", animation_bar)):
+        _fail("Timeline will not draw an initial loop handle")
+        return
+    var cycle: float = ClipEngine.source_span(clip)
+    var from_x: float = timeline.call("_x_at", ClipEngine.end_time(clip))
+    var grip: Vector2 = timeline.call("_loop_grip_center", from_x,
+        float(timeline.get("HEADER_HEIGHT")) + float(animation_row) * float(timeline.get("ROW_HEIGHT")))
+    var target_x: float = timeline.call("_x_at", float(clip["start"]) + 3.0 * cycle)
+    timeline.call("_start_interaction", grip)
+    if str(timeline.get("drag_kind")) != "loop":
+        _fail("Visible grip does not receive finger hit detection")
+        return
+    var moved: Vector2 = grip + Vector2(target_x - from_x, 0.0)
+    timeline.call("_move_interaction", moved)
+    timeline.call("_finish_interaction", moved)
+    clip = (editor.get("clip_tracks") as Dictionary)[model_id][0]
+    if not bool(clip.get("loop", false)) or not _near(ClipEngine.clip_length(clip), 3.0 * cycle):
+        _fail("Dragging an initially unlooped bar did not enable repeated playback")
+        return
     editor.call("_open_clip_editor", model_id, uid)
+    editor.call("_toggle_clip_loop", false)
+    clip = (editor.get("clip_tracks") as Dictionary)[model_id][0]
+    if bool(clip.get("loop", false)):
+        _fail("Turning loop back off did not restore single-play editing")
+        return
+    if not bool(timeline.call("_has_loop_grip", animation_bar)):
+        _fail("Turning repeat off must not hide the discoverable handle")
+        return
     var scope_controls: VBoxContainer = editor.get("clip_scope_controls")
     if scope_controls.visible:
         _fail("Bone list should not appear before enabling restriction")
@@ -76,7 +119,6 @@ func _run() -> void:
     if not _near(float(clip["start"]), 3.0) or not _near(ClipEngine.end_time(clip), 9.0):
         _fail("Moving the bar must preserve the loop extent")
         return
-    var timeline: Control = editor.get("timeline")
     var has_repeat_bar := false
     for track in (timeline.get("tracks") as Array):
         if str(track.get("kind", "")) != "clips":
@@ -102,5 +144,5 @@ func _run() -> void:
         _fail("Loop playback boundary was not serialized")
         return
     editor.call("_close_clip_editor")
-    print("CLIP LOOP UI PASSED: mode separation, scoped joints, loop playback, drag snap, retiming and persistence")
+    print("CLIP LOOP UI PASSED: default visible grip, direct drag activation, mode separation, scoped joints, loop playback, drag snap, retiming and persistence")
     quit(0)
