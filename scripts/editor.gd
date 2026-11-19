@@ -512,27 +512,58 @@ func _timeline_vertical_pan(pixels: float) -> void:
 
 func _build_file_menu() -> void:
     file_menu = PopupPanel.new()
+    file_menu.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 10, 12.0))
     add_child(file_menu)
+    var shell := VBoxContainer.new()
+    shell.add_theme_constant_override("separation", 7)
+    file_menu.add_child(shell)
+    var menu_title := Label.new()
+    menu_title.text = "ファイル操作"
+    menu_title.add_theme_font_size_override("font_size", 17)
+    menu_title.add_theme_color_override("font_color", Color("#f0f7ff"))
+    menu_title.custom_minimum_size.y = 34
+    shell.add_child(menu_title)
+    var scroll := ScrollContainer.new()
+    scroll.name = "FileMenuScroll"
+    scroll.custom_minimum_size = Vector2(0, 380)
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    shell.add_child(scroll)
     var choices := VBoxContainer.new()
     choices.custom_minimum_size = Vector2(260, 0)
-    choices.add_theme_constant_override("separation", 6)
-    file_menu.add_child(choices)
+    choices.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    choices.add_theme_constant_override("separation", 5)
+    scroll.add_child(choices)
     for entry in [
-        {"title":"💾 保存", "action":_save_project},
-        {"title":"📂 保存済みを開く", "action":_load_project},
-        {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
-        {"title":"🎮 Godot再生データ出力", "action":_choose_runtime_export},
-        {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
-        {"title":"⏱ ムービーの長さ", "action":_show_duration_dialog},
-        {"title":"＋ 新しいムービー", "action":_confirm_new_project},
-        {"title":"🗑 選択モデルを削除", "action":_confirm_delete_model}
+        {"header":"プロジェクト"},
+        {"title":"保存", "action":_save_project},
+        {"title":"保存済みを開く", "action":_load_project},
+        {"title":"プロジェクトを読み込む", "action":_choose_project_import},
+        {"header":"書き出し"},
+        {"title":"プロジェクト出力", "action":_choose_project_export},
+        {"title":"Godot再生データ出力", "action":_choose_runtime_export},
+        {"header":"設定・管理"},
+        {"title":"ムービーの長さ", "action":_show_duration_dialog},
+        {"title":"新しいムービー", "action":_confirm_new_project},
+        {"title":"選択モデルを削除", "action":_confirm_delete_model, "danger":true}
     ]:
+        if entry.has("header"):
+            var section := Label.new()
+            section.text = str(entry["header"])
+            section.add_theme_font_size_override("font_size", 12)
+            section.add_theme_color_override("font_color", Color("#8db7d8"))
+            section.custom_minimum_size.y = 26
+            section.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+            choices.add_child(section)
+            continue
         var action: Callable = entry["action"]
         var button := _make_button(choices, str(entry["title"]), func():
             file_menu.hide()
             action.call())
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.custom_minimum_size.y = 52
+        if bool(entry.get("danger", false)):
+            _ui_paint_button(button, "danger")
     confirm_new = ConfirmationDialog.new()
     confirm_new.title = "新しいムービーを作成"
     confirm_new.dialog_text = "現在の編集内容を保存して、新しい空のムービーを作成しますか？"
@@ -556,7 +587,8 @@ func _build_file_menu() -> void:
     add_child(duration_dialog)
 
 func _open_file_menu() -> void:
-    file_menu.popup_centered(Vector2i(290, 364))
+    var available_height := maxi(440, int(get_viewport_rect().size.y) - 40)
+    file_menu.popup_centered(Vector2i(310, mini(520, available_height)))
 
 func _show_duration_dialog() -> void:
     duration_input.set_value_no_signal(DURATION)
@@ -1590,6 +1622,7 @@ func _active_camera_id() -> String:
 
 func _build_camera_menu() -> void:
     camera_menu = PopupPanel.new()
+    camera_menu.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 10, 12.0))
     add_child(camera_menu)
     var content := VBoxContainer.new()
     content.custom_minimum_size.x = 260
@@ -1597,9 +1630,10 @@ func _build_camera_menu() -> void:
     _make_button(content, "＋ 新しい撮影カメラ", func():
         camera_menu.hide()
         _new_camera_and_cut())
-    _make_button(content, "✕ 現在のカットを削除", func():
+    var delete_cut_button := _make_button(content, "✕ 現在のカットを削除", func():
         camera_menu.hide()
         _remove_current_camera_cut())
+    _ui_paint_button(delete_cut_button, "danger")
     _make_button(content, "カメラ一覧を更新", _open_camera_menu)
 
 func _open_camera_menu() -> void:
@@ -1616,6 +1650,7 @@ func _open_camera_menu() -> void:
             "🎬 ここからCam %s" % camera_id.trim_prefix("camera_"),
             _insert_camera_cut.bind(camera_id))
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        _ui_paint_button(button, "item", camera_id == _active_camera_id())
     camera_menu.popup_centered()
 
 func _new_camera_and_cut() -> void:
