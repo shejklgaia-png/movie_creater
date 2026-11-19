@@ -18,16 +18,18 @@ func _run_test() -> void:
 		push_error("Parent/child global position differs from Godot matrix composition")
 		quit(1)
 		return
-	var payload := {"position": [child.origin.x, child.origin.y, child.origin.z], "rotation": [part.quaternion.x, part.quaternion.y, part.quaternion.z, part.quaternion.w], "scale": [part.scale.x, part.scale.y, part.scale.z]}
+	# Store the complete Basis columns: quaternion + scale decomposition may lose shear
+	# or alter non-uniform scale ordering in a hierarchy.
+	var payload := {"position": [child.origin.x, child.origin.y, child.origin.z], "basis": [[child.basis.x.x, child.basis.x.y, child.basis.x.z], [child.basis.y.x, child.basis.y.y, child.basis.y.z], [child.basis.z.x, child.basis.z.y, child.basis.z.z]]}
 	var parsed = JSON.parse_string(JSON.stringify(payload))
 	if not parsed is Dictionary:
 		push_error("Pose JSON roundtrip failed")
 		quit(1)
 		return
 	var p: Array = parsed["position"]
-	var q: Array = parsed["rotation"]
-	var s: Array = parsed["scale"]
-	var restored := Transform3D(Basis(Quaternion(float(q[0]), float(q[1]), float(q[2]), float(q[3]))).scaled(Vector3(float(s[0]), float(s[1]), float(s[2]))), Vector3(float(p[0]), float(p[1]), float(p[2])))
+	var b: Array = parsed["basis"]
+	var restored_basis := Basis(Vector3(float(b[0][0]), float(b[0][1]), float(b[0][2])), Vector3(float(b[1][0]), float(b[1][1]), float(b[1][2])), Vector3(float(b[2][0]), float(b[2][1]), float(b[2][2])))
+	var restored := Transform3D(restored_basis, Vector3(float(p[0]), float(p[1]), float(p[2])))
 	var actual := parent * restored
 	if actual.origin.distance_to(expected.origin) > 0.0001 or actual.basis.x.distance_to(expected.basis.x) > 0.0001 or actual.basis.y.distance_to(expected.basis.y) > 0.0001 or actual.basis.z.distance_to(expected.basis.z) > 0.0001:
 		push_error("Serialized local pose does not reproduce Godot world pose")
