@@ -36,6 +36,8 @@ var next_camera_id := 2
 var next_cut_id := 1
 var camera_menu: PopupPanel
 var shot_preview := false
+# An editing viewpoint is preserved independently of the timeline's shot camera.
+var edit_view_snapshot: Dictionary = {}
 var clip_tracks: Dictionary = {}
 var next_clip_id := 1
 var timeline_scroll: ScrollContainer
@@ -126,9 +128,7 @@ func _ready() -> void:
     if FileAccess.file_exists(SAVE_PATH):
         _load_project()
     else:
-        _add_object("box")
-        _add_object("sphere")
-        _show_message("モデルを選んで移動し、◆でキーフレームを追加")
+        _show_message("BBModelを読み込むと編集を開始できます")
     _seek(0.0)
 
 func _process(delta: float) -> void:
@@ -177,6 +177,19 @@ func _build_interface() -> void:
     preview.own_world_3d = true
     preview_box.add_child(preview)
 
+    # Primary view switch is always reachable in the top-right of the preview,
+    # independent of the currently selected editing category.
+    camera_view_button = _make_button(preview_panel, "カメラ視点", _toggle_camera_view)
+    camera_view_button.name = "PreviewCameraToggle"
+    camera_view_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+    camera_view_button.offset_left = -133.0
+    camera_view_button.offset_right = -8.0
+    camera_view_button.offset_top = 8.0
+    camera_view_button.offset_bottom = 56.0
+    camera_view_button.custom_minimum_size = Vector2(125, 48)
+    camera_view_button.tooltip_text = "カメラ視点へ切り替え"
+    camera_view_button.focus_mode = Control.FOCUS_NONE
+
     # Always-on modeling tools in the lower-right corner of the 3D preview.
     var overlay_row := HBoxContainer.new()
     overlay_row.anchor_left = 1.0
@@ -209,7 +222,7 @@ func _build_interface() -> void:
     part_label.anchor_left = 0.0
     part_label.anchor_right = 0.0
     part_label.offset_left = 8.0
-    part_label.offset_right = 186.0
+    part_label.offset_right = 171.0
     part_label.offset_top = 7.0
     part_label.offset_bottom = 48.0
     part_label.clip_text = true
@@ -279,13 +292,11 @@ func _build_interface() -> void:
         category_stack.add_child(page)
         category_pages[category] = page
 
-    # Model: creating/importing objects, selecting a model, and choosing joints.
+    # Model page only imports external assets: no placeholder shapes or
+    # generic add-object buttons.
     var model_page: VBoxContainer = category_pages["モデル"]
-    var add_row := _category_row(model_page)
-    _category_action(add_row, "＋箱", func(): _add_object("box"))
-    _category_action(add_row, "＋球", func(): _add_object("sphere"))
-    _category_action(add_row, "BB読込", _choose_bbmodel)
     var properties := _category_row(model_page)
+    _category_action(properties, "BB読込", _choose_bbmodel)
     selection = _category_action(properties, "モデル選択 ▾", _toggle_picker)
     selection.custom_minimum_size.x = 98
     part_picker_button = _category_action(properties, "階層", _open_part_picker)
@@ -331,14 +342,12 @@ func _build_interface() -> void:
     animation_hint.add_theme_font_size_override("font_size", 12)
     animation_page.add_child(animation_hint)
 
-    # Camera: view control on one row, cut/key editing on the next.
+    # Camera settings stay in their category; view switching lives in preview.
     var camera_page: VBoxContainer = category_pages["カメラ"]
-    var camera_view_row := _category_row(camera_page)
-    camera_view_button = _category_action(camera_view_row, "編集視点", _toggle_camera_view)
-    _category_action(camera_view_row, "視点→撮影", _copy_editor_to_shot)
-    var camera_key_row := _category_row(camera_page)
-    _category_action(camera_key_row, "カメラ◆", _insert_camera_key)
-    _category_action(camera_key_row, "カット編集", _open_camera_menu)
+    var camera_row := _category_row(camera_page)
+    _category_action(camera_row, "視点→撮影", _copy_editor_to_shot)
+    _category_action(camera_row, "カメラ◆", _insert_camera_key)
+    _category_action(camera_row, "カット編集", _open_camera_menu)
     _select_category("モデル")
 
     status_label = Label.new()
@@ -1462,17 +1471,45 @@ func _insert_camera_key() -> void:
 
 
 func _toggle_camera_view() -> void:
-    shot_preview = not shot_preview
-    if shot_preview:
+    if not shot_preview:
+        # Store both the controller parameters and the actual camera matrix.
+        # Shot-camera animation and timeline scrubbing must never overwrite
+        # the editing viewpoint that existed before this toggle.
+        edit_view_snapshot = {
+            "target": orbit_target,
+            "yaw": orbit_yaw,
+            "pitch": orbit_pitch,
+            "distance": orbit_distance,
+            "transform": editor_camera.global_transform,
+            "fov": editor_camera.fov
+        }
+        shot_preview = true
         shot_camera.make_current()
-        camera_view_button.text = "撮影視点"
-        camera_marker.visible = false
-        _update_gizmo()
-    else:
-        editor_camera.make_current()
         camera_view_button.text = "編集視点"
+        camera_view_button.tooltip_text = "元の編集視点に戻す"
+        camera_marker.visible = false
+        part_label.hide()
+        for tool_button in transform_buttons:
+            tool_button.hide()
+    else:
+        shot_preview = false
+        if not edit_view_snapshot.is_empty():
+            orbit_target = edit_view_snapshot["target"]
+            orbit_yaw = float(edit_view_snapshot["yaw"])
+            orbit_pitch = float(edit_view_snapshot["pitch"])
+            orbit_distance = float(edit_view_snapshot["distance"])
+            _update_camera()
+            editor_camera.global_transform = edit_view_snapshot["transform"]
+            editor_camera.fov = float(edit_view_snapshot["fov"])
+            edit_view_snapshot.clear()
+        editor_camera.make_current()
+        camera_view_button.text = "カメラ視点"
+        camera_view_button.tooltip_text = "カメラ視点へ切り替え"
         camera_marker.visible = true
-        _update_gizmo()
+        part_label.show()
+        for tool_button in transform_buttons:
+            tool_button.show()
+    _update_gizmo()
 
 func _copy_editor_to_shot() -> void:
     _set_playing(false)
