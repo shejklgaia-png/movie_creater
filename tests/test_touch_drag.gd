@@ -16,9 +16,14 @@ func _run_test() -> void:
     await physics_frame
     await physics_frame
 
+    # Explicit test fixture: the end-user UI no longer creates demo shapes.
+    editor.call("_new_project")
+    editor.call("_add_object", "box")
+    await process_frame
+    await physics_frame
     var objects: Dictionary = editor.get("objects_by_id")
     if not objects.has("1"):
-        _fail("Missing default object")
+        _fail("Could not create isolated drag test fixture")
         return
     var node: Node3D = objects["1"]
     var camera: Camera3D = editor.get("editor_camera")
