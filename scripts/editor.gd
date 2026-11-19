@@ -1275,6 +1275,10 @@ func _toggle_clip_bone(enabled: bool, model_id: String, uid: String, group_id: S
         elif not enabled:
             enabled_list.erase(uuid)
     clip["enabled_groups"] = enabled_list
+    clip["limit_bones"] = true
+    if clip_limit_check != null:
+        clip_limit_check.set_pressed_no_signal(true)
+        clip_scope_controls.show()
     _save_edit_clip(clip)
     _sync_bone_checks()
 
@@ -1296,6 +1300,10 @@ func _set_all_bones(enabled: bool) -> void:
         for key in (bb_assets[editing_clip_model]["groups"] as Dictionary).keys():
             ids.append(str(key))
     clip["enabled_groups"] = ids
+    clip["limit_bones"] = true
+    if clip_limit_check != null:
+        clip_limit_check.set_pressed_no_signal(true)
+        clip_scope_controls.show()
     _save_edit_clip(clip)
     _sync_bone_checks()
 
