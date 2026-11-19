@@ -418,9 +418,12 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
                 var a := int(indices[triangle])
                 var b := int(indices[triangle + 1])
                 var c := int(indices[triangle + 2])
-                # Geometry2D triangulation can return the opposite winding
-                # for X/Z projected faces. Align each triangle with Blockbench.
-                if (points[b] - points[a]).cross(points[c] - points[a]).dot(face_normal) < 0.0:
+                # Godot SurfaceTool treats CLOCKWISE triangles as front faces.
+                # The shading normal is outward, so its geometric triangle
+                # cross product must point the OTHER way. The previous
+                # cross.dot(normal) > 0 triangles were culled from outside.
+                # Preserve per-vertex UVs when reversing the triangle.
+                if (points[b] - points[a]).cross(points[c] - points[a]).dot(face_normal) > 0.0:
                     var swapped := b
                     b = c
                     c = swapped
@@ -469,7 +472,10 @@ func _emit_face(st: SurfaceTool, corners: Array, face: Dictionary, tex_size: Vec
     ]
     var turns := posmod(int(round(float(face.get("rotation", 0)) / 90.0)), 4)
     var normal: Vector3 = (corners[1] - corners[0]).cross(corners[2] - corners[0]).normalized()
-    for index in [0, 1, 2, 0, 2, 3]:
+    # The source corners describe outward-facing normals. Reverse the
+    # triangle order for Godot's clockwise front-face convention; UVs follow
+    # the selected vertex so texture orientation remains unchanged.
+    for index in [0, 2, 1, 0, 3, 2]:
         var rotated: int = (int(index) + turns) % 4
         st.set_normal(normal)
         st.set_uv(coords[rotated] / tex_size)

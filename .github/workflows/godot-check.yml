@@ -81,6 +81,11 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_timeline_horizontal_pan.gd 2>&1 | tee /tmp/timeline-horizontal-pan.log
           grep -F "TIMELINE HORIZONTAL PAN PASSED" /tmp/timeline-horizontal-pan.log
+      - name: Godot front-face winding for Blockbench polygons and cubes
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_bbmodel_frontface_winding.gd 2>&1 | tee /tmp/bbmodel-frontface-winding.log
+          grep -F "BBMODEL FRONTFACE WINDING PASSED" /tmp/bbmodel-frontface-winding.log
       - name: Blockbench polygon face orientation and open sheet visibility regression
         run: |
           set -euo pipefail
