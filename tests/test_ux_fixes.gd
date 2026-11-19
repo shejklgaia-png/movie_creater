@@ -94,6 +94,9 @@ func _run() -> void:
         _fail("Deep nested parts missing: %d of at least 35" % part_list.get_child_count())
         return
     editor.call("_close_picker")
+    # Let ScrollContainer resolve the new track height before asserting scroll.
+    await process_frame
+    await process_frame
 
     var timeline: Control = editor.get("timeline")
     var scroller: ScrollContainer = editor.get("timeline_scroll")
