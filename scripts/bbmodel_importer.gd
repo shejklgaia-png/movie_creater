@@ -262,6 +262,30 @@ func _fallback_mesh_material(color_index: int) -> StandardMaterial3D:
     _materials[key] = material
     return material
 
+# Boundary edges identify open sheets without guessing which authored side is
+# front. A closed shell shares every undirected edge exactly twice.
+func _is_closed_polygon_shell(faces: Dictionary) -> bool:
+    var edge_counts: Dictionary = {}
+    for face_value in faces.values():
+        if not (face_value is Dictionary):
+            continue
+        var ids: Variant = face_value.get("vertices", [])
+        if not (ids is Array) or ids.size() < 3:
+            continue
+        for i in range(ids.size()):
+            var first := str(ids[i])
+            var second := str(ids[(i + 1) % ids.size()])
+            if first == second:
+                return false
+            var key := first + "|" + second if first < second else second + "|" + first
+            edge_counts[key] = int(edge_counts.get(key, 0)) + 1
+    if edge_counts.is_empty():
+        return false
+    for count in edge_counts.values():
+        if int(count) != 2:
+            return false
+    return true
+
 func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> void:
     var raw_vertices: Variant = data.get("vertices", {})
     var raw_faces: Variant = data.get("faces", {})
@@ -273,6 +297,11 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
     if vertices.is_empty() or faces.is_empty() or vertices.size() > MAX_MESH_VERTICES:
         warnings.append("空または頂点数が上限を超えるメッシュ: %s" % str(data.get("name", "Mesh")))
         return
+    var shell_closed := _is_closed_polygon_shell(faces)
+    var shell_center := Vector3.ZERO
+    for vertex_value in vertices.values():
+        shell_center += _to_vec(vertex_value) * UNIT
+    shell_center /= float(vertices.size())
     var pivot := _to_vec(data.get("origin", [0, 0, 0]))
     var mesh_root := Node3D.new()
     mesh_root.name = str(data.get("name", "Mesh")).validate_node_name()
@@ -326,6 +355,16 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
         if normal.length_squared() < 0.00000001:
             continue
         normal = normal.normalized()
+        if shell_closed:
+            # A stray reversed face in a solid must not make its exterior
+            # disappear. Align outward normals before correcting triangle
+            # winding below. Do not infer outward for open artist-made sheets.
+            var face_center := Vector3.ZERO
+            for point in points:
+                face_center += point
+            face_center /= float(points.size())
+            if normal.dot(face_center - shell_center) < -0.00001:
+                normal = -normal
 
         # Triangulate in a dominant-axis plane to preserve concave polygon faces.
         var polygon := PackedVector2Array()
@@ -346,9 +385,9 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
 
         var face_texture: Variant = face.get("texture", null)
         var key := untextured_key if face_texture == null else str(face_texture)
-        # Blockbench planar meshes can explicitly request a two-sided face.
-        # Closed meshes keep backface culling so their inner shells stay hidden.
-        if bool(face.get("double_sided", data.get("double_sided", false))):
+        # Open sheets are visible from either side; closed shells retain
+        # backface culling and their corrected, outward-facing normals.
+        if not shell_closed or bool(face.get("double_sided", data.get("double_sided", false))):
             key += "#two_sided"
         if not records.has(key):
             records[key] = []
