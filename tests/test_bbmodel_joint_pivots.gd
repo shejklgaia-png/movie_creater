@@ -10,7 +10,24 @@ func _fail(reason: String) -> void:
     push_error("BBMODEL JOINT PIVOT FAILED: " + reason)
     quit(1)
 
+# The headless suite shares user:// between scripts. Never leave a fixture
+# save behind: later independent CI tests must not silently import it.
+func _restore_saved_fixture(path: String, existed: bool, contents: String) -> void:
+    if existed:
+        var file := FileAccess.open(path, FileAccess.WRITE)
+        if file != null:
+            file.store_string(contents)
+            file.close()
+    elif FileAccess.file_exists(path):
+        DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
 func _run() -> void:
+    var project_path := "user://movie_project.json"
+    var backup_path := "user://movie_project.backup.json"
+    var original_present := FileAccess.file_exists(project_path)
+    var original_backup_present := FileAccess.file_exists(backup_path)
+    var original_content := FileAccess.get_file_as_string(project_path) if original_present else ""
+    var original_backup := FileAccess.get_file_as_string(backup_path) if original_backup_present else ""
     var editor: Control = load("res://scenes/editor.tscn").instantiate()
     root.add_child(editor)
     await process_frame
@@ -148,5 +165,7 @@ func _run() -> void:
     if absf(restored_arm.rotation_degrees.y - initial_rotation.y) < 40.0:
         _fail("Joint bend disappeared after reopening")
         return
+    _restore_saved_fixture(project_path, original_present, original_content)
+    _restore_saved_fixture(backup_path, original_backup_present, original_backup)
     print("BBMODEL JOINT PIVOT PASSED: folder UUIDs, parent pivots, closest-joint rotate, subtree bend, selected hierarchy, project reload")
     quit(0)
