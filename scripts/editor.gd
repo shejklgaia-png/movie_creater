@@ -59,6 +59,7 @@ var part_pose_tracks: Dictionary = {}
 var bb_file_dialog: FileDialog
 var project_file_dialog: FileDialog
 var file_menu: PopupPanel
+var file_menu_button: Button
 var confirm_new: ConfirmationDialog
 var confirm_delete: ConfirmationDialog
 var duration_dialog: ConfirmationDialog
@@ -68,6 +69,7 @@ var is_project_loading := false
 var tl_zoom_buttons: Array[Button] = []
 var tl_zoom_label: Label
 # A single compact, two-row action panel is visible at a time on phones.
+var category_panel: PanelContainer
 var category_pages: Dictionary = {}
 var category_buttons: Dictionary = {}
 var active_category := "素材"
@@ -176,12 +178,15 @@ func _build_interface() -> void:
     redo_button.tooltip_text = "関節編集のみやり直し"
     workspace_button = _make_button(header, "詳細", _toggle_workspace)
     workspace_button.custom_minimum_size = Vector2(52, 48)
+    workspace_button.toggle_mode = true
     workspace_button.add_theme_font_size_override("font_size", 13)
     workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
-    var file_button := _make_button(header, "≡", _open_file_menu)
-    file_button.name = "FileMenuButton"
-    file_button.custom_minimum_size = Vector2(44, 48)
-    file_button.tooltip_text = "ファイル・保存・読み込み"
+    file_menu_button = _make_button(header, "≡", _open_file_menu)
+    file_menu_button.name = "FileMenuButton"
+    file_menu_button.toggle_mode = true
+    file_menu_button.custom_minimum_size = Vector2(44, 48)
+    file_menu_button.tooltip_text = "ファイル・保存・読み込み"
+    _ui_paint_button(file_menu_button, "tool", false)
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -212,6 +217,8 @@ func _build_interface() -> void:
     camera_view_button.custom_minimum_size = Vector2(125, 48)
     camera_view_button.tooltip_text = "カメラ視点へ切り替え"
     camera_view_button.focus_mode = Control.FOCUS_NONE
+    camera_view_button.toggle_mode = true
+    _ui_paint_button(camera_view_button, "tool", false)
 
     # Always-on modeling tools in the lower-right corner of the 3D preview.
     var overlay_row := HBoxContainer.new()
@@ -235,6 +242,7 @@ func _build_interface() -> void:
         mode_button.custom_minimum_size = Vector2(51, 46)
         mode_button.clip_text = true
         mode_button.focus_mode = Control.FOCUS_NONE
+        mode_button.toggle_mode = true
         transform_buttons.append(mode_button)
         if int(tool["mode"]) == 0:
             mode_option = mode_button
@@ -261,6 +269,8 @@ func _build_interface() -> void:
     var playback := HBoxContainer.new()
     dock.add_child(playback)
     play_button = _make_button(playback, "▶", _toggle_play)
+    play_button.toggle_mode = true
+    _ui_paint_button(play_button, "tool", false)
     clock_label = Label.new()
     clock_label.text = "00:00.00"
     clock_label.custom_minimum_size.x = 92
@@ -297,20 +307,32 @@ func _build_interface() -> void:
 
     # Four bounded categories replace five permanently stacked toolbar rows.
     # Buttons remain 48px high; only one page consumes vertical space.
+    # Active tab and page meet directly, sharing one continuous surface.
+    var category_shell := VBoxContainer.new()
+    category_shell.name = "CategoryShell"
+    category_shell.add_theme_constant_override("separation", 0)
+    dock.add_child(category_shell)
     var category_nav := HBoxContainer.new()
-    category_nav.add_theme_constant_override("separation", 4)
-    dock.add_child(category_nav)
+    category_nav.name = "CategoryTabs"
+    category_nav.add_theme_constant_override("separation", 3)
+    category_shell.add_child(category_nav)
+    category_panel = PanelContainer.new()
+    category_panel.name = "CategoryPanel"
+    category_panel.custom_minimum_size = Vector2(0, 100)
+    category_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    category_panel.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 0, 6.0))
+    category_shell.add_child(category_panel)
     var category_stack := VBoxContainer.new()
     category_stack.name = "CategoryContent"
-    category_stack.custom_minimum_size = Vector2(0, 100)
     category_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     category_stack.add_theme_constant_override("separation", 0)
-    dock.add_child(category_stack)
+    category_panel.add_child(category_stack)
     for category in ["素材", "変形", "動き", "撮影", "出力"]:
         var nav_button := _make_button(category_nav, category, _select_category.bind(category))
         nav_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         nav_button.custom_minimum_size = Vector2(0, 48)
         nav_button.toggle_mode = true
+        nav_button.name = "CategoryTab_" + category
         nav_button.focus_mode = Control.FOCUS_NONE
         category_buttons[category] = nav_button
         var page := VBoxContainer.new()
@@ -327,6 +349,7 @@ func _build_interface() -> void:
             "出力": "プロジェクトの保存とGodotへの書き出し"
         }[category]
         page_description.add_theme_font_size_override("font_size", 12)
+        page_description.add_theme_color_override("font_color", Color("#b9d0e5"))
         page_description.custom_minimum_size.y = 22
         page_description.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
         page_description.clip_text = true
@@ -343,7 +366,8 @@ func _build_interface() -> void:
     part_picker_button = _category_action(properties, "階層", _open_part_picker)
     part_picker_button.custom_minimum_size.x = 64
     var model_management := _category_row(model_page)
-    _category_action(model_management, "選択モデルを削除", _confirm_delete_model)
+    var delete_model_button := _category_action(model_management, "選択モデルを削除", _confirm_delete_model)
+    _ui_paint_button(delete_model_button, "danger")
 
     # Transform: position/rotation/scale tools stay overlaid on the preview.
     # The numeric and keyframe actions live together in this category.
@@ -375,6 +399,8 @@ func _build_interface() -> void:
     motion_button = _category_action(motion_row, "＋アニメ配置", _open_motion_picker)
     motion_button.tooltip_text = "読み込んだモデルのアニメーションをタイムラインに追加"
     pose_record_button = _category_action(motion_row, "◆ポーズOFF", _toggle_pose_record)
+    pose_record_button.toggle_mode = true
+    _ui_paint_button(pose_record_button, "tool", false)
     pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
     var animation_hint := Label.new()
     animation_hint.text = "バーをタップして再生範囲・使用関節を編集"
@@ -412,6 +438,7 @@ func _build_interface() -> void:
     status_label.clip_text = true
     status_label.autowrap_mode = TextServer.AUTOWRAP_OFF
     status_label.add_theme_font_size_override("font_size", 12)
+    status_label.add_theme_color_override("font_color", Color("#b5ccde"))
     dock.add_child(status_label)
     _build_picker()
     _build_clip_editor()
@@ -444,8 +471,11 @@ func _select_category(category: String) -> void:
         return
     active_category = category
     for key in category_pages:
-        (category_pages[key] as Control).visible = key == category
-        (category_buttons[key] as Button).set_pressed_no_signal(key == category)
+        var active: bool = key == category
+        (category_pages[key] as Control).visible = active
+        var tab: Button = category_buttons[key]
+        tab.set_pressed_no_signal(active)
+        _ui_paint_button(tab, "tab", active)
 
 func _toggle_workspace() -> void:
     motion_workspace = not motion_workspace
@@ -458,6 +488,8 @@ func _toggle_workspace() -> void:
 func _refresh_workspace() -> void:
     if workspace_button != null:
         workspace_button.text = "基本" if motion_workspace else "詳細"
+        workspace_button.set_pressed_no_signal(motion_workspace)
+        _ui_paint_button(workspace_button, "tool", motion_workspace)
     if category_buttons.has("変形"):
         (category_buttons["変形"] as Control).visible = motion_workspace
     if pose_record_button != null:
@@ -484,27 +516,59 @@ func _timeline_vertical_pan(pixels: float) -> void:
 
 func _build_file_menu() -> void:
     file_menu = PopupPanel.new()
+    file_menu.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 10, 12.0))
+    file_menu.popup_hide.connect(func(): _ui_set_file_menu_active(false))
     add_child(file_menu)
+    var shell := VBoxContainer.new()
+    shell.add_theme_constant_override("separation", 7)
+    file_menu.add_child(shell)
+    var menu_title := Label.new()
+    menu_title.text = "ファイル操作"
+    menu_title.add_theme_font_size_override("font_size", 17)
+    menu_title.add_theme_color_override("font_color", Color("#f0f7ff"))
+    menu_title.custom_minimum_size.y = 34
+    shell.add_child(menu_title)
+    var scroll := ScrollContainer.new()
+    scroll.name = "FileMenuScroll"
+    scroll.custom_minimum_size = Vector2(0, 380)
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    shell.add_child(scroll)
     var choices := VBoxContainer.new()
     choices.custom_minimum_size = Vector2(260, 0)
-    choices.add_theme_constant_override("separation", 6)
-    file_menu.add_child(choices)
+    choices.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    choices.add_theme_constant_override("separation", 5)
+    scroll.add_child(choices)
     for entry in [
-        {"title":"💾 保存", "action":_save_project},
-        {"title":"📂 保存済みを開く", "action":_load_project},
-        {"title":"⬆ プロジェクトを書き出す", "action":_choose_project_export},
-        {"title":"🎮 Godot再生データ出力", "action":_choose_runtime_export},
-        {"title":"⬇ プロジェクトを読み込む", "action":_choose_project_import},
-        {"title":"⏱ ムービーの長さ", "action":_show_duration_dialog},
-        {"title":"＋ 新しいムービー", "action":_confirm_new_project},
-        {"title":"🗑 選択モデルを削除", "action":_confirm_delete_model}
+        {"header":"プロジェクト"},
+        {"title":"保存", "action":_save_project},
+        {"title":"保存済みを開く", "action":_load_project},
+        {"title":"プロジェクトを読み込む", "action":_choose_project_import},
+        {"header":"書き出し"},
+        {"title":"プロジェクト出力", "action":_choose_project_export},
+        {"title":"Godot再生データ出力", "action":_choose_runtime_export},
+        {"header":"設定・管理"},
+        {"title":"ムービーの長さ", "action":_show_duration_dialog},
+        {"title":"新しいムービー", "action":_confirm_new_project},
+        {"title":"選択モデルを削除", "action":_confirm_delete_model, "danger":true}
     ]:
+        if entry.has("header"):
+            var section := Label.new()
+            section.text = str(entry["header"])
+            section.add_theme_font_size_override("font_size", 12)
+            section.add_theme_color_override("font_color", Color("#8db7d8"))
+            section.custom_minimum_size.y = 26
+            section.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+            choices.add_child(section)
+            continue
         var action: Callable = entry["action"]
         var button := _make_button(choices, str(entry["title"]), func():
             file_menu.hide()
             action.call())
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.custom_minimum_size.y = 52
+        if bool(entry.get("danger", false)):
+            _ui_paint_button(button, "danger")
     confirm_new = ConfirmationDialog.new()
     confirm_new.title = "新しいムービーを作成"
     confirm_new.dialog_text = "現在の編集内容を保存して、新しい空のムービーを作成しますか？"
@@ -527,8 +591,15 @@ func _build_file_menu() -> void:
     duration_dialog.confirmed.connect(func(): _set_project_duration(duration_input.value))
     add_child(duration_dialog)
 
+func _ui_set_file_menu_active(active: bool) -> void:
+    if file_menu_button != null:
+        file_menu_button.set_pressed_no_signal(active)
+        _ui_paint_button(file_menu_button, "tool", active)
+
 func _open_file_menu() -> void:
-    file_menu.popup_centered(Vector2i(290, 364))
+    var available_height := maxi(440, int(get_viewport_rect().size.y) - 40)
+    file_menu.popup_centered(Vector2i(310, mini(520, available_height)))
+    _ui_set_file_menu_active(true)
 
 func _show_duration_dialog() -> void:
     duration_input.set_value_no_signal(DURATION)
@@ -1111,6 +1182,7 @@ func _open_motion_picker() -> void:
         button.custom_minimum_size.y = 54.0
         button.clip_text = true
         button.pressed.connect(_pick_animation.bind(selected_id, i))
+        _ui_paint_button(button, "item")
         picker_list.add_child(button)
     picker_overlay.show()
 
@@ -1135,6 +1207,7 @@ func _build_clip_editor() -> void:
     outside.pressed.connect(_close_clip_editor)
     clip_overlay.add_child(outside)
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.04
     sheet.anchor_top = 0.15
     sheet.anchor_right = 0.96
@@ -1148,6 +1221,7 @@ func _build_clip_editor() -> void:
     layout.add_child(title_row)
     clip_title = Label.new()
     clip_title.text = "アニメーション詳細"
+    clip_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     clip_title.clip_text = true
     clip_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     title_row.add_child(clip_title)
@@ -1383,11 +1457,71 @@ func _close_clip_editor() -> void:
     editing_clip_model = ""
     editing_clip_uid = ""
 
+# Shared design tokens and button states. All controls retain >=44px targets.
+func _ui_box(fill: Color, radius: int = 7, padding: float = 7.0) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = fill
+    style.set_corner_radius_all(radius)
+    style.set_content_margin(SIDE_LEFT, padding)
+    style.set_content_margin(SIDE_RIGHT, padding)
+    style.set_content_margin(SIDE_TOP, 4.0)
+    style.set_content_margin(SIDE_BOTTOM, 4.0)
+    return style
+
+func _ui_paint_button(button: Button, role: String = "action", selected: bool = false) -> void:
+    var fill := Color("#32475d")
+    var foreground := Color("#edf5ff")
+    if role == "tab":
+        fill = Color("#26374b") if selected else Color("#172332")
+        foreground = Color("#f5fbff") if selected else Color("#9bafc4")
+    elif role == "tool":
+        fill = Color("#315a73") if selected else Color("#28394e")
+        foreground = Color("#f3fcff") if selected else Color("#cad9e9")
+    elif role == "item":
+        fill = Color("#31546b") if selected else Color("#28394c")
+        foreground = Color("#ffffff") if selected else Color("#c6d9ea")
+    elif role == "danger":
+        fill = Color("#573b47")
+        foreground = Color("#ffdee0")
+    var normal := _ui_box(fill, 0 if role == "tab" else 7, 5.0 if role == "tab" else 7.0)
+    if role == "tab":
+        normal.corner_radius_top_left = 7
+        normal.corner_radius_top_right = 7
+        if selected:
+            normal.border_width_top = 3
+            normal.border_color = Color("#6cbeed")
+    elif selected and (role == "tool" or role == "item"):
+        normal.border_width_left = 3
+        normal.border_color = Color("#6cc5ef")
+    button.add_theme_stylebox_override("normal", normal)
+    button.add_theme_stylebox_override("pressed", normal.duplicate())
+    button.add_theme_stylebox_override("hover_pressed", normal.duplicate())
+    var hover := normal.duplicate() as StyleBoxFlat
+    if role != "tab":
+        hover.bg_color = fill.lightened(0.12)
+    button.add_theme_stylebox_override("hover", hover)
+    button.add_theme_stylebox_override("disabled", _ui_box(Color("#202c3b"), 7))
+    button.add_theme_color_override("font_color", foreground)
+    button.add_theme_color_override("font_hover_color", foreground)
+    button.add_theme_color_override("font_pressed_color", foreground)
+    button.add_theme_color_override("font_hover_pressed_color", foreground)
+    button.add_theme_color_override("font_disabled_color", Color("#7b8fa2"))
+    button.add_theme_font_size_override("font_size", 14)
+
+func _ui_style_sheet(panel: PanelContainer) -> void:
+    var surface := _ui_box(Color("#27394f"), 10, 12.0)
+    surface.border_color = Color("#506b86")
+    surface.border_width_top = 1
+    surface.border_width_bottom = 1
+    panel.add_theme_stylebox_override("panel", surface)
+
 func _make_button(parent: Control, title: String, action: Callable) -> Button:
     var button := Button.new()
     button.text = title
     button.custom_minimum_size = Vector2(48, 48)
     button.clip_text = true
+    button.focus_mode = Control.FOCUS_NONE
+    _ui_paint_button(button)
     button.pressed.connect(action)
     parent.add_child(button)
     return button
@@ -1499,6 +1633,7 @@ func _active_camera_id() -> String:
 
 func _build_camera_menu() -> void:
     camera_menu = PopupPanel.new()
+    camera_menu.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 10, 12.0))
     add_child(camera_menu)
     var content := VBoxContainer.new()
     content.custom_minimum_size.x = 260
@@ -1506,9 +1641,10 @@ func _build_camera_menu() -> void:
     _make_button(content, "＋ 新しい撮影カメラ", func():
         camera_menu.hide()
         _new_camera_and_cut())
-    _make_button(content, "✕ 現在のカットを削除", func():
+    var delete_cut_button := _make_button(content, "✕ 現在のカットを削除", func():
         camera_menu.hide()
         _remove_current_camera_cut())
+    _ui_paint_button(delete_cut_button, "danger")
     _make_button(content, "カメラ一覧を更新", _open_camera_menu)
 
 func _open_camera_menu() -> void:
@@ -1525,6 +1661,7 @@ func _open_camera_menu() -> void:
             "🎬 ここからCam %s" % camera_id.trim_prefix("camera_"),
             _insert_camera_cut.bind(camera_id))
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+        _ui_paint_button(button, "item", camera_id == _active_camera_id())
     camera_menu.popup_centered()
 
 func _new_camera_and_cut() -> void:
@@ -1663,6 +1800,8 @@ func _toggle_camera_view() -> void:
         part_label.show()
         for tool_button in transform_buttons:
             tool_button.show()
+    camera_view_button.set_pressed_no_signal(shot_preview)
+    _ui_paint_button(camera_view_button, "tool", shot_preview)
     _update_gizmo()
 
 func _copy_editor_to_shot() -> void:
@@ -2134,7 +2273,9 @@ func _set_transform_mode(tool: int) -> void:
     for index in range(transform_buttons.size()):
         var button: Button = transform_buttons[index]
         var button_mode: int = [3, 0, 1, 2][index]
-        button.modulate = Color("#8ecaff") if button_mode == mode_index else Color.WHITE
+        var selected: bool = button_mode == mode_index
+        button.set_pressed_no_signal(selected)
+        _ui_paint_button(button, "tool", selected)
     _update_gizmo()
 
 func _open_part_picker() -> void:
@@ -2150,6 +2291,7 @@ func _open_part_picker() -> void:
     full_button.text = "◉ モデル全体"
     full_button.custom_minimum_size.y = 52
     full_button.pressed.connect(_choose_part.bind(selected_id, ""))
+    _ui_paint_button(full_button, "item", selected_part_path.is_empty())
     picker_list.add_child(full_button)
     var model: Node3D = objects_by_id[selected_id]
     _fill_part_picker(model, model, 0)
@@ -2171,6 +2313,7 @@ func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
         button.clip_text = true
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.pressed.connect(_choose_part.bind(selected_id, path))
+        _ui_paint_button(button, "item", selected_part_model == selected_id and path == selected_part_path)
         picker_list.add_child(button)
         _fill_part_picker(root_node, child, depth + 1)
 
@@ -2181,7 +2324,8 @@ func _choose_part(model_id: String, path: String) -> void:
 func _toggle_pose_record() -> void:
     pose_record_mode = not pose_record_mode
     pose_record_button.text = "◆ポーズON" if pose_record_mode else "◆ポーズOFF"
-    pose_record_button.modulate = Color("#ffda83") if pose_record_mode else Color.WHITE
+    pose_record_button.set_pressed_no_signal(pose_record_mode)
+    _ui_paint_button(pose_record_button, "tool", pose_record_mode)
     if pose_record_mode:
         _show_message("ポーズ記録ON：関節を動かすと現在時刻に◆を登録")
     else:
@@ -2443,6 +2587,7 @@ func _build_transform_inspector() -> void:
     outside.pressed.connect(_close_transform_inspector)
     transform_overlay.add_child(outside)
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.04
     sheet.anchor_right = 0.96
     sheet.anchor_top = 0.30
@@ -2456,6 +2601,7 @@ func _build_transform_inspector() -> void:
     container.add_child(title_row)
     transform_title = Label.new()
     transform_title.text = "要素の数値編集"
+    transform_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     transform_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     transform_title.clip_text = true
     title_row.add_child(transform_title)
@@ -2572,6 +2718,7 @@ func _build_picker() -> void:
     picker_overlay.add_child(outside_button)
 
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.0
     sheet.anchor_top = 0.45
     sheet.anchor_right = 1.0
@@ -2587,6 +2734,7 @@ func _build_picker() -> void:
     contents.add_child(title_row)
     picker_title = Label.new()
     picker_title.text = "モデルを選択"
+    picker_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     picker_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     picker_title.add_theme_font_size_override("font_size", 20)
     title_row.add_child(picker_title)
@@ -2617,6 +2765,7 @@ func _refresh_picker_list() -> void:
     camera_button.text = "🎥 撮影カメラ"
     camera_button.custom_minimum_size.y = 56.0
     camera_button.pressed.connect(_choose_model.bind("__camera__"))
+    _ui_paint_button(camera_button, "item", selected_id == "__camera__")
     picker_list.add_child(camera_button)
     for id_value in objects_by_id.keys():
         var item_id := str(id_value)
@@ -2627,6 +2776,7 @@ func _refresh_picker_list() -> void:
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         button.pressed.connect(_choose_model.bind(item_id))
+        _ui_paint_button(button, "item", item_id == selected_id)
         picker_list.add_child(button)
 
 func _choose_model(id: String) -> void:
@@ -2876,6 +3026,8 @@ func _update_clock() -> void:
 func _set_playing(value: bool) -> void:
     playing = value
     play_button.text = "Ⅱ" if playing else "▶"
+    play_button.set_pressed_no_signal(playing)
+    _ui_paint_button(play_button, "tool", playing)
 
 func _toggle_play() -> void:
     if not playing and current_time >= DURATION:

@@ -101,6 +101,11 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_ux_fixes.gd 2>&1 | tee /tmp/ux-fixes.log
           grep -F "UX FIX TEST PASSED" /tmp/ux-fixes.log
+      - name: Android portrait visual hierarchy and selected-tab continuity
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_visual_hierarchy.gd 2>&1 | tee /tmp/visual-hierarchy.log
+          grep -F "VISUAL HIERARCHY PASSED" /tmp/visual-hierarchy.log
       - name: Task-based portrait workspace navigation
         run: |
           set -euo pipefail
