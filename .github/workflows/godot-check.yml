@@ -76,6 +76,11 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_usability_audit.gd 2>&1 | tee /tmp/usability-audit.log
           grep -F "UX_AUDIT_FINISHED" /tmp/usability-audit.log
+      - name: Stable vertical timeline touch scrolling regression
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_timeline_scroll_stability.gd 2>&1 | tee /tmp/timeline-scroll.log
+          grep -F "TIMELINE SCROLL STABILITY PASSED" /tmp/timeline-scroll.log
       - name: Strict Android portrait UX regression
         run: |
           set -euo pipefail
