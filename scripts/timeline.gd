@@ -108,7 +108,10 @@ func _draw() -> void:
                 var text_width := maxf(1.0, rect.size.x - (32.0 if looping else 10.0))
                 draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 18), str(clip.get("label", "Motion")), HORIZONTAL_ALIGNMENT_LEFT, text_width, 12, Color.WHITE)
                 if looping and x2 > LEFT_MARGIN + 12.0 and x2 <= w - 1.0:
-                    var center := Vector2(x2 - 13.0, y + ROW_HEIGHT * 0.5)
+                    # Put the grip mostly outside the animation bar, so even
+                    # short one-second clips retain a large area to drag.
+                    var grip_x := x2 + 15.0 if x2 <= w - 32.0 else x2 - 13.0
+                    var center := Vector2(grip_x, y + ROW_HEIGHT * 0.5)
                     draw_circle(center, 14.0, Color("#f2c467"))
                     draw_string(ThemeDB.fallback_font, center + Vector2(-9, 7), "↻", HORIZONTAL_ALIGNMENT_LEFT, 22, 22, Color("#1b283a"))
         else:
@@ -165,8 +168,11 @@ func _start_interaction(at: Vector2) -> void:
                 var clip: Dictionary = clips[i]
                 var clip_end_x := _x_at(float(clip.get("end", 0.0)))
                 var clip_start_x := _x_at(float(clip.get("start", 0.0)))
-                if at.x >= maxf(LEFT_MARGIN, clip_start_x) - 3.0 and at.x <= clip_end_x + 3.0:
-                    drag_kind = "loop" if bool(clip.get("loop", false)) and clip_end_x <= size.x and absf(at.x - (clip_end_x - 13.0)) <= 23.0 else "clip"
+                var grip_x := clip_end_x + 15.0 if clip_end_x <= size.x - 32.0 else clip_end_x - 13.0
+                var handle_hit := bool(clip.get("loop", false)) and clip_end_x <= size.x and absf(at.x - grip_x) <= 19.0 and at.x >= LEFT_MARGIN
+                var bar_hit := at.x >= maxf(LEFT_MARGIN, clip_start_x) - 3.0 and at.x <= clip_end_x + 3.0
+                if bar_hit or handle_hit:
+                    drag_kind = "loop" if handle_hit else "clip"
                     drag_id = str(entry.get("id", ""))
                     drag_uid = str(clip.get("uid", ""))
                     drag_original_time = float(clip.get("end", 0.0)) if drag_kind == "loop" else float(clip.get("start", 0.0))
