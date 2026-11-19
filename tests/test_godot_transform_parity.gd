@@ -2,6 +2,9 @@ extends SceneTree
 # Regression contract: Godot local/world transform and serialized pose must agree.
 # This test is intentionally independent of the editor UI; device gestures remain unverified.
 func _initialize() -> void:
+	call_deferred("_run_test")
+
+func _run_test() -> void:
 	var parent := Transform3D(Basis.from_euler(Vector3(0.2, -0.4, 0.3)).scaled(Vector3(1.2, 1.2, 1.2)), Vector3(2.0, 1.0, -3.0))
 	var child := Transform3D(Basis.from_euler(Vector3(-0.3, 0.5, 0.1)), Vector3(0.7, -1.2, 2.5))
 	var expected := parent * child
