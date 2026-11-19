@@ -8,7 +8,7 @@ static func valid_source(source: String) -> bool:
 	var data: Variant = JSON.parse_string(source)
 	if not (data is Dictionary):
 		return false
-	if int(data.get("version", -1)) not in [1, 2, 3, 4, 5]:
+	if int(data.get("version", -1)) not in [1, 2, 3, 4, 5, 6]:
 		return false
 	if not (data.get("objects", null) is Array):
 		return false

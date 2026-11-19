@@ -72,7 +72,7 @@ func _run() -> void:
         return
 
     var data: Dictionary = editor.call("_serialize_project")
-    if int(data["version"]) != 5 or (data["camera_cuts"] as Array).size() != 1:
+    if int(data["version"]) != 6 or (data["camera_cuts"] as Array).size() != 1:
         _fail("Camera cut data not serialized in project v5")
         return
     editor.call("_save_project")

@@ -105,8 +105,11 @@ func _parse_textures(raw: Variant, resolution: Variant) -> void:
         var material := StandardMaterial3D.new()
         material.albedo_color = Color.WHITE
         material.texture_filter = BaseMaterial3D.TEXTURE_FILTER_NEAREST
-        material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-        material.cull_mode = BaseMaterial3D.CULL_DISABLED
+        # Opaque textured surfaces must be depth-writing opaque surfaces.
+        # For cutouts and blended PNGs use depth-compatible coverage instead
+        # of ordinary alpha sorting, which made inner polygons shine through.
+        material.transparency = BaseMaterial3D.TRANSPARENCY_DISABLED
+        material.cull_mode = BaseMaterial3D.CULL_BACK
         var source := str(data.get("source", ""))
         if source.begins_with("data:image/") and source.contains(";base64,"):
             var comma := source.find(",")
@@ -118,6 +121,12 @@ func _parse_textures(raw: Variant, resolution: Variant) -> void:
             elif source.begins_with("data:image/jpeg") or source.begins_with("data:image/jpg"):
                 image_error = img.load_jpg_from_buffer(decoded)
             if image_error == OK:
+                match img.detect_alpha():
+                    Image.ALPHA_BIT:
+                        material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+                        material.alpha_scissor_threshold = 0.5
+                    Image.ALPHA_BLEND:
+                        material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_HASH
                 material.albedo_texture = ImageTexture.create_from_image(img)
             else:
                 warnings.append("未対応または破損した埋め込み画像: %s" % str(data.get("name", key)))
@@ -134,7 +143,7 @@ func _get_material(texture_ref: Variant) -> Material:
         return _materials["0"]
     var plain := StandardMaterial3D.new()
     plain.albedo_color = Color("#b5c7dd")
-    plain.cull_mode = BaseMaterial3D.CULL_DISABLED
+    plain.cull_mode = BaseMaterial3D.CULL_BACK
     return plain
 
 func _texture_key(face: Dictionary) -> String:
@@ -249,7 +258,7 @@ func _fallback_mesh_material(color_index: int) -> StandardMaterial3D:
     var material := StandardMaterial3D.new()
     material.albedo_color = Color(BLOCKBENCH_COLORS[posmod(color_index, BLOCKBENCH_COLORS.size())])
     material.roughness = 0.85
-    material.cull_mode = BaseMaterial3D.CULL_DISABLED
+    material.cull_mode = BaseMaterial3D.CULL_BACK
     _materials[key] = material
     return material
 
@@ -337,6 +346,10 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
 
         var face_texture: Variant = face.get("texture", null)
         var key := untextured_key if face_texture == null else str(face_texture)
+        # Blockbench planar meshes can explicitly request a two-sided face.
+        # Closed meshes keep backface culling so their inner shells stay hidden.
+        if bool(face.get("double_sided", data.get("double_sided", false))):
+            key += "#two_sided"
         if not records.has(key):
             records[key] = []
         (records[key] as Array).append({
@@ -349,19 +362,33 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
         var builder := SurfaceTool.new()
         builder.begin(Mesh.PRIMITIVE_TRIANGLES)
         var uv_size: Vector2 = _default_texture_size
+        var texture_key := str(material_key).trim_suffix("#two_sided")
         var material: Material = _fallback_mesh_material(color_index)
-        if material_key != untextured_key:
-            uv_size = _dimensions.get(str(material_key), _default_texture_size)
-            material = _get_material(material_key)
+        if texture_key != untextured_key:
+            uv_size = _dimensions.get(texture_key, _default_texture_size)
+            material = _get_material(texture_key)
+        if str(material_key).ends_with("#two_sided") and material is BaseMaterial3D:
+            material = material.duplicate() as Material
+            (material as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
         for record in records[material_key]:
             var points: Array = record["points"]
             var uv_points: Array = record["uvs"]
             var indices: PackedInt32Array = record["indices"]
             var face_normal: Vector3 = record["normal"]
-            for i in indices:
-                builder.set_normal(face_normal)
-                builder.set_uv(uv_points[i] / uv_size)
-                builder.add_vertex(points[i])
+            for triangle in range(0, indices.size(), 3):
+                var a := int(indices[triangle])
+                var b := int(indices[triangle + 1])
+                var c := int(indices[triangle + 2])
+                # Geometry2D triangulation can return the opposite winding
+                # for X/Z projected faces. Align each triangle with Blockbench.
+                if (points[b] - points[a]).cross(points[c] - points[a]).dot(face_normal) < 0.0:
+                    var swapped := b
+                    b = c
+                    c = swapped
+                for vertex_index in [a, b, c]:
+                    builder.set_normal(face_normal)
+                    builder.set_uv(uv_points[vertex_index] / uv_size)
+                    builder.add_vertex(points[vertex_index])
         builder.set_material(material)
         var assembled := builder.commit()
         if assembled != null and assembled.get_surface_count() > 0:

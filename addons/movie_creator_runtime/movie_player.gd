@@ -166,6 +166,10 @@ func _apply_native_animation(model_id: String, record: Dictionary, active: Dicti
         return # Keep the signal-driven adapter fallback intact.
     var group_paths: Dictionary = record.get("group_paths", {})
     var enabled: Variant = active.get("enabled_groups", null)
+    # Version 6 scopes joints only when the user enabled that option.
+    # Earlier exports have no opt-in flag; preserve their existing masks.
+    if active.has("limit_bones") and not bool(active.get("limit_bones", false)):
+        enabled = null
     # A masked clip without UUID-to-node paths cannot be reproduced safely.
     if enabled is Array and group_paths.is_empty() and not enabled.is_empty():
         return
@@ -284,9 +288,13 @@ func seek(seconds: float) -> void:
         var active: Dictionary = Clips.active_clip(record.get("animation_clips", []), time)
         _apply_native_animation(model_id, record, active)
         if not active.is_empty():
-            var included: Array = active.get("enabled_groups", [])
+            var included: Array = active.get("enabled_groups", []).duplicate()
+            if active.has("limit_bones") and not bool(active.get("limit_bones", false)):
+                included.clear()
+                for uuid in (record.get("group_paths", {}) as Dictionary).keys():
+                    included.append(str(uuid))
             animation_frame.emit(model_id, int(active.get("animation_index", -1)),
-                Clips.source_time(active, time), included.duplicate())
+                Clips.source_time(active, time), included)
 
         var correction_paths: Dictionary = {}
         var offsets: Dictionary = record.get("element_offsets", {})

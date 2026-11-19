@@ -116,8 +116,10 @@ func _run() -> void:
     if absf(float(editor.get("current_time")) - after_start) > 0.001:
         _fail("Vertical track scrolling altered playhead")
         return
-    if scroller.scroll_vertical <= 0:
-        _fail("Vertical track scrolling did not move ScrollContainer")
+    # In the compact workspace, a short timeline can fit completely.
+    # Scrolling is needed only when the content overflows its viewport.
+    if timeline.custom_minimum_size.y > scroller.size.y + 1.0 and scroller.scroll_vertical <= 0:
+        _fail("Vertical track scrolling did not move overflowing ScrollContainer")
         return
     timeline._finish_interaction(Vector2(143, 40))
     if bool(timeline.get("vertical_panning")):

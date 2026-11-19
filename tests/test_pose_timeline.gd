@@ -128,7 +128,7 @@ func _run() -> void:
         return
 
     var serialized: Dictionary = editor.call("_serialize_project")
-    if int(serialized.get("version", -1)) != 5:
+    if int(serialized.get("version", -1)) != 6:
         _fail("Project did not switch to v5")
         return
     editor.call("_save_project")
