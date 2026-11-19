@@ -368,7 +368,7 @@ func _create_mesh(data: Dictionary, parent: Node3D, parent_origin: Vector3) -> v
             uv_size = _dimensions.get(texture_key, _default_texture_size)
             material = _get_material(texture_key)
         if str(material_key).ends_with("#two_sided") and material is BaseMaterial3D:
-            material = material.duplicate()
+            material = material.duplicate() as Material
             (material as BaseMaterial3D).cull_mode = BaseMaterial3D.CULL_DISABLED
         for record in records[material_key]:
             var points: Array = record["points"]
