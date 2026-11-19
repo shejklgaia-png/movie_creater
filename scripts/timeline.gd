@@ -63,6 +63,15 @@ func pan_time(delta_seconds: float) -> void:
     view_start = clampf(view_start + delta_seconds, 0.0, maxf(0.0, duration - _view_span()))
     queue_redraw()
 
+# Camera cut bars have no repeat control. Animation clips always expose one,
+# including before looping is enabled; otherwise users cannot discover it.
+func _has_loop_grip(clip: Dictionary) -> bool:
+    return bool(clip.get("loop_handle", false)) or bool(clip.get("loop", false))
+
+func _loop_grip_center(end_x: float, row_y: float) -> Vector2:
+    var grip_x := end_x + 15.0 if end_x <= size.x - 32.0 else end_x - 13.0
+    return Vector2(grip_x, row_y + ROW_HEIGHT * 0.5)
+
 func _draw() -> void:
     var w := size.x
     var h := size.y
@@ -105,15 +114,19 @@ func _draw() -> void:
                             if tx >= rect.position.x and tx <= rect.end.x:
                                 draw_line(Vector2(tx, y + 7.0), Vector2(tx, y + ROW_HEIGHT - 7.0), Color("#d9eeff"), 1.0)
                             tick += cycle
-                var text_width := maxf(1.0, rect.size.x - (32.0 if looping else 10.0))
+                var text_width := maxf(1.0, rect.size.x - (32.0 if _has_loop_grip(clip) else 10.0))
                 draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 18), str(clip.get("label", "Motion")), HORIZONTAL_ALIGNMENT_LEFT, text_width, 12, Color.WHITE)
-                if looping and x2 > LEFT_MARGIN + 12.0 and x2 <= w - 1.0:
-                    # Put the grip mostly outside the animation bar, so even
-                    # short one-second clips retain a large area to drag.
-                    var grip_x := x2 + 15.0 if x2 <= w - 32.0 else x2 - 13.0
-                    var center := Vector2(grip_x, y + ROW_HEIGHT * 0.5)
-                    draw_circle(center, 14.0, Color("#f2c467"))
-                    draw_string(ThemeDB.fallback_font, center + Vector2(-9, 7), "↻", HORIZONTAL_ALIGNMENT_LEFT, 22, 22, Color("#1b283a"))
+                if _has_loop_grip(clip) and x2 > LEFT_MARGIN + 12.0 and x2 <= w - 1.0:
+                    # Visible before the first loop. The icon is drawn as
+                    # geometry so it is never lost to Android font fallback.
+                    # Outside placement preserves dragging short source clips.
+                    var center := _loop_grip_center(x2, y)
+                    draw_circle(center, 14.0, Color("#f2c467") if looping else Color("#ffe4a2"))
+                    draw_arc(center, 8.0, 0.65, 5.2, 23, Color("#1b283a"), 2.5)
+                    draw_colored_polygon(PackedVector2Array([
+                        center + Vector2(7.0, -6.0),
+                        center + Vector2(13.0, -4.0),
+                        center + Vector2(8.0, 1.0)]), Color("#1b283a"))
         else:
             var times: Array = entry.get("times", [])
             for t_value in times:
@@ -168,8 +181,8 @@ func _start_interaction(at: Vector2) -> void:
                 var clip: Dictionary = clips[i]
                 var clip_end_x := _x_at(float(clip.get("end", 0.0)))
                 var clip_start_x := _x_at(float(clip.get("start", 0.0)))
-                var grip_x := clip_end_x + 15.0 if clip_end_x <= size.x - 32.0 else clip_end_x - 13.0
-                var handle_hit := bool(clip.get("loop", false)) and clip_end_x <= size.x and absf(at.x - grip_x) <= 19.0 and at.x >= LEFT_MARGIN
+                var grip_center := _loop_grip_center(clip_end_x, HEADER_HEIGHT + float(row) * ROW_HEIGHT)
+                var handle_hit := _has_loop_grip(clip) and clip_end_x > LEFT_MARGIN + 12.0 and clip_end_x <= size.x - 1.0 and absf(at.x - grip_center.x) <= 19.0 and at.x >= LEFT_MARGIN
                 var bar_hit := at.x >= maxf(LEFT_MARGIN, clip_start_x) - 3.0 and at.x <= clip_end_x + 3.0
                 if bar_hit or handle_hit:
                     drag_kind = "loop" if handle_hit else "clip"
