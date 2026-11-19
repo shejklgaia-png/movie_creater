@@ -86,6 +86,11 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_ux_fixes.gd 2>&1 | tee /tmp/ux-fixes.log
           grep -F "UX FIX TEST PASSED" /tmp/ux-fixes.log
+      - name: Task-based portrait workspace navigation
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_task_tabs.gd 2>&1 | tee /tmp/task-tabs.log
+          grep -F "MOVIE TASK TABS PASSED" /tmp/task-tabs.log
       - name: Roadmap camera cuts and portable game runtime
         run: |
           set -euo pipefail
