@@ -426,6 +426,13 @@ func _change_timeline_zoom(direction: int) -> void:
 func _timeline_vertical_pan(pixels: float) -> void:
     if timeline_scroll == null:
         return
+    # Imported/changed tracks may enlarge the timeline before Container's
+    # deferred sort has updated its scrollbar. Keep immediate touch scrolling
+    # responsive by synchronizing the range with the visible viewport.
+    var scroll_bar := timeline_scroll.get_v_scroll_bar()
+    if timeline != null and timeline.custom_minimum_size.y > timeline_scroll.size.y:
+        scroll_bar.max_value = maxf(scroll_bar.max_value, timeline.custom_minimum_size.y)
+        scroll_bar.page = maxf(1.0, timeline_scroll.size.y)
     timeline_scroll.scroll_vertical = maxi(0, timeline_scroll.scroll_vertical + roundi(pixels))
 
 func _build_file_menu() -> void:
