@@ -41,6 +41,11 @@ jobs:
           set -euo pipefail
           /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_mobile_ui_stability.gd 2>&1 | tee /tmp/mobile-ui-test.log
           grep -F "MOBILE UI TEST PASSED" /tmp/mobile-ui-test.log
+      - name: Camera viewport toggle and editing viewpoint preservation
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_camera_view_toggle.gd 2>&1 | tee /tmp/camera-view-toggle.log
+          grep -F "CAMERA VIEW TOGGLE PASSED" /tmp/camera-view-toggle.log
       - name: Cutscene timeline clip and camera integration
         run: |
           set -euo pipefail
