@@ -59,6 +59,7 @@ var part_pose_tracks: Dictionary = {}
 var bb_file_dialog: FileDialog
 var project_file_dialog: FileDialog
 var file_menu: PopupPanel
+var file_menu_button: Button
 var confirm_new: ConfirmationDialog
 var confirm_delete: ConfirmationDialog
 var duration_dialog: ConfirmationDialog
@@ -180,10 +181,12 @@ func _build_interface() -> void:
     workspace_button.toggle_mode = true
     workspace_button.add_theme_font_size_override("font_size", 13)
     workspace_button.tooltip_text = "基本編集と関節・キーフレームの詳細編集を切り替え"
-    var file_button := _make_button(header, "≡", _open_file_menu)
-    file_button.name = "FileMenuButton"
-    file_button.custom_minimum_size = Vector2(44, 48)
-    file_button.tooltip_text = "ファイル・保存・読み込み"
+    file_menu_button = _make_button(header, "≡", _open_file_menu)
+    file_menu_button.name = "FileMenuButton"
+    file_menu_button.toggle_mode = true
+    file_menu_button.custom_minimum_size = Vector2(44, 48)
+    file_menu_button.tooltip_text = "ファイル・保存・読み込み"
+    _ui_paint_button(file_menu_button, "tool", false)
 
     preview_panel = Control.new()
     preview_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -397,6 +400,7 @@ func _build_interface() -> void:
     motion_button.tooltip_text = "読み込んだモデルのアニメーションをタイムラインに追加"
     pose_record_button = _category_action(motion_row, "◆ポーズOFF", _toggle_pose_record)
     pose_record_button.toggle_mode = true
+    _ui_paint_button(pose_record_button, "tool", false)
     pose_record_button.tooltip_text = "ON: 選択関節の操作を現在時刻にキーフレーム記録"
     var animation_hint := Label.new()
     animation_hint.text = "バーをタップして再生範囲・使用関節を編集"
@@ -513,6 +517,7 @@ func _timeline_vertical_pan(pixels: float) -> void:
 func _build_file_menu() -> void:
     file_menu = PopupPanel.new()
     file_menu.add_theme_stylebox_override("panel", _ui_box(Color("#26374b"), 10, 12.0))
+    file_menu.popup_hide.connect(func(): _ui_set_file_menu_active(false))
     add_child(file_menu)
     var shell := VBoxContainer.new()
     shell.add_theme_constant_override("separation", 7)
@@ -586,9 +591,15 @@ func _build_file_menu() -> void:
     duration_dialog.confirmed.connect(func(): _set_project_duration(duration_input.value))
     add_child(duration_dialog)
 
+func _ui_set_file_menu_active(active: bool) -> void:
+    if file_menu_button != null:
+        file_menu_button.set_pressed_no_signal(active)
+        _ui_paint_button(file_menu_button, "tool", active)
+
 func _open_file_menu() -> void:
     var available_height := maxi(440, int(get_viewport_rect().size.y) - 40)
     file_menu.popup_centered(Vector2i(310, mini(520, available_height)))
+    _ui_set_file_menu_active(true)
 
 func _show_duration_dialog() -> void:
     duration_input.set_value_no_signal(DURATION)
