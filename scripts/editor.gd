@@ -363,7 +363,8 @@ func _build_interface() -> void:
     part_picker_button = _category_action(properties, "階層", _open_part_picker)
     part_picker_button.custom_minimum_size.x = 64
     var model_management := _category_row(model_page)
-    _category_action(model_management, "選択モデルを削除", _confirm_delete_model)
+    var delete_model_button := _category_action(model_management, "選択モデルを削除", _confirm_delete_model)
+    _ui_paint_button(delete_model_button, "danger")
 
     # Transform: position/rotation/scale tools stay overlaid on the preview.
     # The numeric and keyframe actions live together in this category.
@@ -1138,6 +1139,7 @@ func _open_motion_picker() -> void:
         button.custom_minimum_size.y = 54.0
         button.clip_text = true
         button.pressed.connect(_pick_animation.bind(selected_id, i))
+        _ui_paint_button(button, "item")
         picker_list.add_child(button)
     picker_overlay.show()
 
@@ -1162,6 +1164,7 @@ func _build_clip_editor() -> void:
     outside.pressed.connect(_close_clip_editor)
     clip_overlay.add_child(outside)
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.04
     sheet.anchor_top = 0.15
     sheet.anchor_right = 0.96
@@ -1175,6 +1178,7 @@ func _build_clip_editor() -> void:
     layout.add_child(title_row)
     clip_title = Label.new()
     clip_title.text = "アニメーション詳細"
+    clip_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     clip_title.clip_text = true
     clip_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     title_row.add_child(clip_title)
@@ -2241,6 +2245,7 @@ func _open_part_picker() -> void:
     full_button.text = "◉ モデル全体"
     full_button.custom_minimum_size.y = 52
     full_button.pressed.connect(_choose_part.bind(selected_id, ""))
+    _ui_paint_button(full_button, "item", selected_part_path.is_empty())
     picker_list.add_child(full_button)
     var model: Node3D = objects_by_id[selected_id]
     _fill_part_picker(model, model, 0)
@@ -2262,6 +2267,7 @@ func _fill_part_picker(root_node: Node3D, current: Node, depth: int) -> void:
         button.clip_text = true
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.pressed.connect(_choose_part.bind(selected_id, path))
+        _ui_paint_button(button, "item", selected_part_model == selected_id and path == selected_part_path)
         picker_list.add_child(button)
         _fill_part_picker(root_node, child, depth + 1)
 
@@ -2535,6 +2541,7 @@ func _build_transform_inspector() -> void:
     outside.pressed.connect(_close_transform_inspector)
     transform_overlay.add_child(outside)
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.04
     sheet.anchor_right = 0.96
     sheet.anchor_top = 0.30
@@ -2548,6 +2555,7 @@ func _build_transform_inspector() -> void:
     container.add_child(title_row)
     transform_title = Label.new()
     transform_title.text = "要素の数値編集"
+    transform_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     transform_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     transform_title.clip_text = true
     title_row.add_child(transform_title)
@@ -2664,6 +2672,7 @@ func _build_picker() -> void:
     picker_overlay.add_child(outside_button)
 
     var sheet := PanelContainer.new()
+    _ui_style_sheet(sheet)
     sheet.anchor_left = 0.0
     sheet.anchor_top = 0.45
     sheet.anchor_right = 1.0
@@ -2679,6 +2688,7 @@ func _build_picker() -> void:
     contents.add_child(title_row)
     picker_title = Label.new()
     picker_title.text = "モデルを選択"
+    picker_title.add_theme_color_override("font_color", Color("#e8f5ff"))
     picker_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     picker_title.add_theme_font_size_override("font_size", 20)
     title_row.add_child(picker_title)
@@ -2709,6 +2719,7 @@ func _refresh_picker_list() -> void:
     camera_button.text = "🎥 撮影カメラ"
     camera_button.custom_minimum_size.y = 56.0
     camera_button.pressed.connect(_choose_model.bind("__camera__"))
+    _ui_paint_button(camera_button, "item", selected_id == "__camera__")
     picker_list.add_child(camera_button)
     for id_value in objects_by_id.keys():
         var item_id := str(id_value)
@@ -2719,6 +2730,7 @@ func _refresh_picker_list() -> void:
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
         button.pressed.connect(_choose_model.bind(item_id))
+        _ui_paint_button(button, "item", item_id == selected_id)
         picker_list.add_child(button)
 
 func _choose_model(id: String) -> void:
