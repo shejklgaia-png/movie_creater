@@ -39,6 +39,50 @@ func _run() -> void:
             _fail("Touch target smaller than 44px: %s, rect %s" % [button.text, str(rect)])
             return
 
+    # Each action category must stay on screen, not just the startup page.
+    var category_pages: Dictionary = editor.get("category_pages")
+    var category_buttons: Dictionary = editor.get("category_buttons")
+    if category_pages.size() != 4 or category_buttons.size() != 4:
+        _fail("Expected four compact editing categories")
+        return
+    for canvas in [Vector2(320, 640), Vector2(360, 800), Vector2(432, 960)]:
+        editor.size = canvas
+        await process_frame
+        await process_frame
+        for category in ["モデル", "変形", "アニメ", "カメラ"]:
+            editor.call("_select_category", category)
+            await process_frame
+            if not (category_pages[category] as Control).visible:
+                _fail("Active category did not become visible: " + category)
+                return
+            var visible_count := 0
+            for other in category_pages:
+                if (category_pages[other] as Control).visible:
+                    visible_count += 1
+            if visible_count != 1:
+                _fail("Multiple editing categories take up space")
+                return
+            if not (category_buttons[category] as Button).button_pressed:
+                _fail("Active category tab is not visibly selected: " + category)
+                return
+            var category_visible_buttons: Array[Button] = []
+            _collect_buttons(editor, category_visible_buttons)
+            for visible_button in category_visible_buttons:
+                var bounds := visible_button.get_global_rect()
+                if bounds.position.x < -1.0 or bounds.end.x > canvas.x + 1.0:
+                    _fail("Category %s has horizontal overflow at %s: %s, %s" % [category, str(canvas), visible_button.text, str(bounds)])
+                    return
+                if bounds.position.y < -1.0 or bounds.end.y > canvas.y + 1.0:
+                    _fail("Category %s is vertically clipped at %s: %s, %s" % [category, str(canvas), visible_button.text, str(bounds)])
+                    return
+                if bounds.size.x < 44.0 or bounds.size.y < 44.0:
+                    _fail("Category %s has too-small touch target: %s, %s" % [category, visible_button.text, str(bounds)])
+                    return
+    editor.size = Vector2(360, 800)
+    editor.call("_select_category", "モデル")
+    await process_frame
+    await process_frame
+
     var source := FileAccess.get_file_as_string("res://tests/fixtures/free_mesh_5.bbmodel")
     if not editor.call("_import_bbmodel_text", source, "UI Fixture"):
         _fail("Could not load layered model")
