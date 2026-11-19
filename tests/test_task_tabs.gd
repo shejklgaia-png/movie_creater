@@ -17,6 +17,12 @@ func _run() -> void:
     if pages.size() != names.size() or buttons.size() != names.size():
         _fail("Expected five separate task tabs")
         return
+    # All five tabs are accessible in the detailed workspace. In the basic
+    # workspace, transform tools are intentionally hidden to avoid clutter.
+    if (buttons["変形"] as Button).visible:
+        _fail("Basic workspace should not expose detailed transform tools")
+        return
+    app.call("_toggle_workspace")
     for canvas in [Vector2(320, 640), Vector2(360, 800), Vector2(432, 960)]:
         app.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
         app.size = canvas
@@ -38,6 +44,7 @@ func _run() -> void:
             if r.size.x < 44.0 or r.size.y < 44.0 or r.position.x < -1.0 or r.end.x > canvas.x + 1.0:
                 _fail("Task tab cannot be tapped at " + str(canvas) + ": " + name)
                 return
+    app.call("_toggle_workspace")
     app.call("_select_category", "出力")
     var output_page: Control = pages["出力"]
     var labels := ""
