@@ -615,7 +615,7 @@ func _serialize_runtime_data() -> Dictionary:
     scene_data["objects"] = export_objects
     scene_data.erase("version")
     scene_data["schema"] = "movie_creator_runtime_v1"
-    scene_data["source_version"] = 5
+    scene_data["source_version"] = 6
     return scene_data
 
 func _choose_runtime_export() -> void:
