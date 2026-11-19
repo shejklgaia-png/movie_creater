@@ -6,6 +6,7 @@ signal seek_requested(time_seconds: float)
 signal key_dragged(object_id: String, key_index: int, time_seconds: float, finished: bool)
 signal clip_tapped(model_id: String, clip_uid: String)
 signal clip_dragged(model_id: String, clip_uid: String, seconds: float, finished: bool)
+signal loop_end_dragged(model_id: String, clip_uid: String, seconds: float, finished: bool)
 signal vertical_pan_requested(pixels: float)
 
 const LEFT_MARGIN := 85.0
@@ -94,7 +95,22 @@ func _draw() -> void:
                 var rect := Rect2(maxf(LEFT_MARGIN, x1), y + 5.0, maxf(7.0, minf(w, x2) - maxf(LEFT_MARGIN, x1)), ROW_HEIGHT - 10.0)
                 draw_rect(rect, Color("#438fbe"), true)
                 draw_rect(rect, Color("#a0d8f6"), false, 1.5)
-                draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 18), str(clip.get("label", "Motion")), HORIZONTAL_ALIGNMENT_LEFT, maxf(1.0, rect.size.x - 10.0), 12, Color.WHITE)
+                var looping := bool(clip.get("loop", false))
+                if looping:
+                    var cycle := float(clip.get("cycle", 0.0))
+                    if cycle > 0.001:
+                        var tick := start + cycle
+                        while tick < end - 0.001:
+                            var tx := _x_at(tick)
+                            if tx >= rect.position.x and tx <= rect.end.x:
+                                draw_line(Vector2(tx, y + 7.0), Vector2(tx, y + ROW_HEIGHT - 7.0), Color("#d9eeff"), 1.0)
+                            tick += cycle
+                var text_width := maxf(1.0, rect.size.x - (32.0 if looping else 10.0))
+                draw_string(ThemeDB.fallback_font, rect.position + Vector2(5, 18), str(clip.get("label", "Motion")), HORIZONTAL_ALIGNMENT_LEFT, text_width, 12, Color.WHITE)
+                if looping and x2 > LEFT_MARGIN + 12.0 and x2 <= w - 1.0:
+                    var center := Vector2(x2 - 13.0, y + ROW_HEIGHT * 0.5)
+                    draw_circle(center, 14.0, Color("#f2c467"))
+                    draw_string(ThemeDB.fallback_font, center + Vector2(-9, 7), "↻", HORIZONTAL_ALIGNMENT_LEFT, 22, 22, Color("#1b283a"))
         else:
             var times: Array = entry.get("times", [])
             for t_value in times:
@@ -147,11 +163,13 @@ func _start_interaction(at: Vector2) -> void:
             var clips: Array = entry.get("clips", [])
             for i in range(clips.size() - 1, -1, -1):
                 var clip: Dictionary = clips[i]
-                if at.x >= _x_at(float(clip.get("start", 0.0))) - 3.0 and at.x <= _x_at(float(clip.get("end", 0.0))) + 3.0:
-                    drag_kind = "clip"
+                var clip_end_x := _x_at(float(clip.get("end", 0.0)))
+                var clip_start_x := _x_at(float(clip.get("start", 0.0)))
+                if at.x >= maxf(LEFT_MARGIN, clip_start_x) - 3.0 and at.x <= clip_end_x + 3.0:
+                    drag_kind = "loop" if bool(clip.get("loop", false)) and clip_end_x <= size.x and absf(at.x - (clip_end_x - 13.0)) <= 23.0 else "clip"
                     drag_id = str(entry.get("id", ""))
                     drag_uid = str(clip.get("uid", ""))
-                    drag_original_time = float(clip.get("start", 0.0))
+                    drag_original_time = float(clip.get("end", 0.0)) if drag_kind == "loop" else float(clip.get("start", 0.0))
                     return
         else:
             var times: Array = entry.get("times", [])
@@ -187,6 +205,8 @@ func _move_interaction(at: Vector2) -> void:
     var new_time := clampf(drag_original_time + (at.x - drag_start_x) * _view_span() / _time_width(), 0.0, duration)
     if drag_kind == "clip":
         clip_dragged.emit(drag_id, drag_uid, new_time, false)
+    elif drag_kind == "loop":
+        loop_end_dragged.emit(drag_id, drag_uid, new_time, false)
     elif drag_kind == "key":
         key_dragged.emit(drag_id, drag_index, new_time, false)
 
@@ -199,10 +219,13 @@ func _finish_interaction(at: Vector2) -> void:
         drag_moved = false
         vertical_panning = false
         return
-    if drag_kind == "clip":
+    if drag_kind == "clip" or drag_kind == "loop":
         if drag_moved:
             var t := clampf(drag_original_time + (at.x - drag_start_x) * _view_span() / _time_width(), 0.0, duration)
-            clip_dragged.emit(drag_id, drag_uid, t, true)
+            if drag_kind == "loop":
+                loop_end_dragged.emit(drag_id, drag_uid, t, true)
+            else:
+                clip_dragged.emit(drag_id, drag_uid, t, true)
         else:
             clip_tapped.emit(drag_id, drag_uid)
     elif drag_kind == "key" and drag_moved:
