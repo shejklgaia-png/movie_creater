@@ -1,6 +1,7 @@
 extends SceneTree
 ## Loop grip snapping, opt-in bone scope, and basic/authoring workspace regression.
 const ClipEngine = preload("res://scripts/clip_engine.gd")
+const RuntimeClips = preload("res://addons/movie_creator_runtime/clip_engine.gd")
 
 func _initialize() -> void:
     call_deferred("_run")
@@ -62,7 +63,7 @@ func _run() -> void:
     if not bool(clip.get("loop", false)) or not _near(ClipEngine.clip_length(clip), 4.0):
         _fail("Loop should initially occupy two source cycles")
         return
-    if not _near(ClipEngine.source_time(clip, 0.5), ClipEngine.source_time(clip, 2.5)):
+    if not _near(ClipEngine.source_time(clip, 0.5), ClipEngine.source_time(clip, 2.5)) or not _near(RuntimeClips.source_time(clip, 0.5), RuntimeClips.source_time(clip, 2.5)):
         _fail("Source animation did not repeat with timeline time")
         return
     editor.call("_on_loop_end_dragged", model_id, uid, 5.88, true)
