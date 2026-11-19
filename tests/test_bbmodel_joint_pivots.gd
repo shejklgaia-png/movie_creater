@@ -39,7 +39,9 @@ func _run() -> void:
         _fail("Joint marker is missing from the actual pivot node")
         return
     var origin: Array = arm_info["origin"]
-    if origin != [16, 12, 8]:
+    # Godot JSON numeric arrays may contain floats even for integer pixels.
+    var source_pivot := Vector3(float(origin[0]), float(origin[1]), float(origin[2]))
+    if source_pivot.distance_to(Vector3(16.0, 12.0, 8.0)) > 0.00001:
         _fail("Blockbench joint pivot coordinates changed: " + str(origin))
         return
     if arm.position.distance_to(Vector3(0.5, 0.25, 0.0)) > 0.00001:
