@@ -2,6 +2,7 @@ extends SceneTree
 ## Loop grip snapping, opt-in bone scope, and basic/authoring workspace regression.
 const ClipEngine = preload("res://scripts/clip_engine.gd")
 const RuntimeClips = preload("res://addons/movie_creator_runtime/clip_engine.gd")
+const TimelineView = preload("res://scripts/timeline.gd")
 
 func _initialize() -> void:
     call_deferred("_run")
@@ -66,7 +67,7 @@ func _run() -> void:
     var cycle: float = ClipEngine.source_span(clip)
     var from_x: float = timeline.call("_x_at", ClipEngine.end_time(clip))
     var grip: Vector2 = timeline.call("_loop_grip_center", from_x,
-        float(timeline.get("HEADER_HEIGHT")) + float(animation_row) * float(timeline.get("ROW_HEIGHT")))
+        TimelineView.HEADER_HEIGHT + float(animation_row) * TimelineView.ROW_HEIGHT)
     var target_x: float = timeline.call("_x_at", float(clip["start"]) + 3.0 * cycle)
     timeline.call("_start_interaction", grip)
     if str(timeline.get("drag_kind")) != "loop":
