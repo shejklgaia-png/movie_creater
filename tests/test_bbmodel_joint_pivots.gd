@@ -88,14 +88,21 @@ func _run() -> void:
     editor.call("_seek", 0.0)
     var body_before := body.global_transform
     var joint_before := arm.global_position
-    var child_before := cube.global_position
+    # The cuboid's transform origin coincides with the joint pivot in this
+    # fixture. Check an actual visible mesh vertex instead of its origin.
+    var visual: MeshInstance3D = cube.get_node_or_null("BBFaceMesh")
+    if visual == null:
+        _fail("Articulated child has no renderable mesh")
+        return
+    var vertices: PackedVector3Array = visual.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+    var child_before: Vector3 = visual.to_global(vertices[0])
     var initial_rotation := arm.rotation_degrees
     editor.set("drag_target_node", arm)
     editor.set("drag_rotation_start", initial_rotation)
     editor.set("drag_handle_axis", 2)
     editor.set("pointer_origin", Vector2(100, 200))
     editor.call("_apply_model_drag", Vector2(190, 200))
-    var child_after := cube.global_position
+    var child_after: Vector3 = visual.to_global(vertices[0])
     if absf(arm.rotation_degrees.y - initial_rotation.y) < 40.0:
         _fail("Touch rotation did not turn the joint")
         return
