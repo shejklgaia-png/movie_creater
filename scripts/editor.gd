@@ -262,7 +262,7 @@ func _build_interface() -> void:
     _make_button(playback, "＋", func(): _change_timeline_zoom(1))
 
     timeline_scroll = ScrollContainer.new()
-    timeline_scroll.custom_minimum_size = Vector2(0, 140)
+    timeline_scroll.custom_minimum_size = Vector2(0, 112)
     timeline_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     timeline_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
     # TimelineView owns drag gestures. Disable ScrollContainer's built-in
@@ -333,9 +333,6 @@ func _build_interface() -> void:
     # Transform: position/rotation/scale tools stay overlaid on the preview.
     # The numeric and keyframe actions live together in this category.
     var transform_page: VBoxContainer = category_pages["変形"]
-    var axis_row := _category_row(transform_page)
-    axis_option = _category_action(axis_row, "変形する軸：自由", _cycle_axis)
-    axis_option.tooltip_text = "X / Y / Z / 自由を切り替える"
     var nudge_row := _category_row(transform_page)
     for action in [
         {"text":"－", "call":func(): _nudge(-1.0)},
@@ -346,6 +343,8 @@ func _build_interface() -> void:
     ]:
         _category_action(nudge_row, str(action["text"]), action["call"])
     var key_row := _category_row(transform_page)
+    axis_option = _category_action(key_row, "軸：自由", _cycle_axis)
+    axis_option.tooltip_text = "X / Y / Z / 自由を切り替える"
     _category_action(key_row, "◆ キー登録", _insert_key)
     var key_hint := Label.new()
     key_hint.text = "現在の変形をタイムラインに記録"
