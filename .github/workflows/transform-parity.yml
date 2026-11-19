@@ -1,0 +1,23 @@
+name: Godot transform parity regression
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  transform-parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4.7.2
+        run: |
+          curl -fL --retry 3 -o /tmp/godot.zip https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          unzip -q /tmp/godot.zip -d /tmp
+          chmod +x /tmp/Godot_v4.7.2-stable_linux.x86_64
+      - name: Import resources
+        run: /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --editor --quit
+      - name: Verify serialized local pose reproduces world transform
+        run: |
+          set -euo pipefail
+          /tmp/Godot_v4.7.2-stable_linux.x86_64 --headless --path . --script res://tests/test_godot_transform_parity.gd 2>&1 | tee /tmp/parity.log
+          grep -F "GODOT TRANSFORM PARITY PASSED" /tmp/parity.log
