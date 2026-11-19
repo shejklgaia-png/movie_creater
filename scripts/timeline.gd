@@ -17,7 +17,7 @@ const KEY_HIT_RADIUS := 19.0
 
 var duration := 15.0
 var playhead := 0.0
-var zoom := 1.0
+var zoom := 3.0 # For 15s projects, show 5s at once so horizontal panning is useful.
 var view_start := 0.0
 var tracks: Array[Dictionary] = []
 var drag_kind := ""
@@ -37,6 +37,7 @@ var drag_last_position := Vector2.ZERO
 var active_touch_index := -1
 var last_touch_frame := -100
 var vertical_panning := false
+var horizontal_panning := false
 
 func set_tracks(data: Array[Dictionary]) -> void:
     tracks = data
@@ -192,6 +193,7 @@ func _start_interaction(at: Vector2) -> void:
     drag_last_position = at
     drag_pointer_offset = Vector2.ZERO
     vertical_panning = false
+    horizontal_panning = false
     drag_moved = false
     var row := int(floorf((at.y - HEADER_HEIGHT) / ROW_HEIGHT))
     if row >= 0 and row < tracks.size() and at.x >= LEFT_MARGIN:
@@ -221,7 +223,7 @@ func _start_interaction(at: Vector2) -> void:
                     drag_original_time = float(times[i])
                     seek_requested.emit(drag_original_time)
                     return
-    seek_requested.emit(_time_at(at.x))
+    # Wait for finger release to distinguish a tap from a timeline pan.
 
 func _move_interaction(at: Vector2, physical_delta: Vector2 = Vector2.ZERO, has_physical_delta: bool = false) -> void:
     # Tests and programmatic callers can still pass absolute local points.
@@ -237,15 +239,19 @@ func _move_interaction(at: Vector2, physical_delta: Vector2 = Vector2.ZERO, has_
     # clip/key while the finger is scrolling through many models.
     if not drag_moved:
         vertical_panning = vertical > horizontal * 1.25
+        # Empty track space and ruler drag pan time, leaving clip and key
+        # dragging unchanged. Screen-relative deltas avoid layout jitter.
+        horizontal_panning = not vertical_panning and drag_kind == ""
         drag_moved = true
     if vertical_panning:
         vertical_pan_requested.emit(-motion.y)
         drag_last_y = at.y
         return
+    if horizontal_panning:
+        pan_time(-motion.x * _view_span() / _time_width())
+        return
     drag_last_y = at.y
     if drag_kind == "":
-        if drag_start_x + drag_pointer_offset.x >= LEFT_MARGIN:
-            seek_requested.emit(_time_at(drag_start_x + drag_pointer_offset.x))
         return
     var new_time := clampf(drag_original_time + drag_pointer_offset.x * _view_span() / _time_width(), 0.0, duration)
     if drag_kind == "clip":
@@ -256,14 +262,17 @@ func _move_interaction(at: Vector2, physical_delta: Vector2 = Vector2.ZERO, has_
         key_dragged.emit(drag_id, drag_index, new_time, false)
 
 func _finish_interaction(at: Vector2) -> void:
-    if vertical_panning:
+    if vertical_panning or horizontal_panning:
         drag_kind = ""
         drag_id = ""
         drag_index = -1
         drag_uid = ""
         drag_moved = false
         vertical_panning = false
+        horizontal_panning = false
         return
+    if drag_kind == "" and not drag_moved:
+        seek_requested.emit(_time_at(at.x))
     if drag_kind == "clip" or drag_kind == "loop":
         if drag_moved:
             var t := clampf(drag_original_time + drag_pointer_offset.x * _view_span() / _time_width(), 0.0, duration)
@@ -281,3 +290,4 @@ func _finish_interaction(at: Vector2) -> void:
     drag_index = -1
     drag_uid = ""
     drag_moved = false
+    horizontal_panning = false
