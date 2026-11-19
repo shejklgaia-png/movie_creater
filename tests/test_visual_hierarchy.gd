@@ -90,6 +90,23 @@ func _run() -> void:
         _fail("Camera mode did not restore inactive styling")
         return
 
+    var menu_button: Button = editor.get("file_menu_button")
+    var file_popup: PopupPanel = editor.get("file_menu")
+    var menu_scroll: ScrollContainer = file_popup.find_child("FileMenuScroll", true, false)
+    if menu_button == null or menu_scroll == null:
+        _fail("The file menu or its scrollable grouped actions is absent")
+        return
+    editor.call("_open_file_menu")
+    await process_frame
+    if not menu_button.button_pressed:
+        _fail("Open file menu is not visually marked in the header")
+        return
+    file_popup.hide()
+    await process_frame
+    if menu_button.button_pressed:
+        _fail("Closing file menu leaves header control selected")
+        return
+
     var picker: Control = editor.get("picker_overlay")
     var inspector: Control = editor.get("clip_overlay")
     var properties: Control = editor.get("transform_overlay")
