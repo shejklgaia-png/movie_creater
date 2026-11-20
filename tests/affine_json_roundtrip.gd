@@ -15,7 +15,25 @@ func _run() -> void:
     var expected := child.global_transform
     var t := child.transform
     var payload := {"origin": [t.origin.x, t.origin.y, t.origin.z], "basis": [[t.basis.x.x,t.basis.x.y,t.basis.x.z],[t.basis.y.x,t.basis.y.y,t.basis.y.z],[t.basis.z.x,t.basis.z.y,t.basis.z.z]]}
-    var parsed = JSON.parse_string(JSON.stringify(payload))
+    # Exercise real filesystem persistence, not just an in-memory JSON conversion.
+    var path := "user://affine_roundtrip_ci.json"
+    var output := FileAccess.open(path, FileAccess.WRITE)
+    if output == null:
+        push_error("Cannot open affine test file for writing: %d" % FileAccess.get_open_error())
+        quit(1)
+        return
+    output.store_string(JSON.stringify(payload))
+    output.flush()
+    output.close()
+    var input := FileAccess.open(path, FileAccess.READ)
+    if input == null:
+        push_error("Cannot reopen affine test file: %d" % FileAccess.get_open_error())
+        quit(1)
+        return
+    var serialized := input.get_as_text()
+    input.close()
+    DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+    var parsed = JSON.parse_string(serialized)
     if not parsed is Dictionary:
         push_error("JSON payload was not a dictionary")
         quit(1)
