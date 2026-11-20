@@ -50,6 +50,10 @@ static func read_with_backup(save_path: String, backup_path: String) -> Dictiona
 	return {"ok": false, "recovered": false}
 
 static func write_safe(source: String, save_path: String, backup_path: String, temp_path: String) -> bool:
+	if save_path.is_empty() or backup_path.is_empty() or temp_path.is_empty():
+		return false
+	if save_path == backup_path or save_path == temp_path or backup_path == temp_path:
+		return false
 	if save_path.begins_with("content://") or backup_path.begins_with("content://") or temp_path.begins_with("content://"):
 		return false
 	if not valid_source(source):
