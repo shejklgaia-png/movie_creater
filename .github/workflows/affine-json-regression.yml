@@ -1,0 +1,18 @@
+name: Affine transform JSON regression
+on:
+  push:
+    branches: [main, 'automation/transform-affine-parity-20261121']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  affine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot 4
+        run: |
+          wget -q https://github.com/godotengine/godot-builds/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip -O godot.zip
+          unzip -q godot.zip
+          chmod +x Godot_v4.4.1-stable_linux.x86_64
+      - name: Run affine regression
+        run: ./Godot_v4.4.1-stable_linux.x86_64 --headless --path . --script res://tests/affine_json_roundtrip.gd
