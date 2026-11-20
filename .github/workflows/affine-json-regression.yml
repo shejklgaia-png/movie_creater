@@ -14,6 +14,8 @@ jobs:
           wget -q https://github.com/godotengine/godot-builds/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip -O godot.zip
           unzip -q godot.zip
           chmod +x Godot_v4.4.1-stable_linux.x86_64
+      - name: Import project and register global script classes
+        run: ./Godot_v4.4.1-stable_linux.x86_64 --headless --editor --path . --import --quit
       - name: Run affine regression
         run: ./Godot_v4.4.1-stable_linux.x86_64 --headless --path . --script res://tests/affine_json_roundtrip.gd
       - name: Run storage destination regression
