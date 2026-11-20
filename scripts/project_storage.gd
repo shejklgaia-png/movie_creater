@@ -4,7 +4,11 @@ class_name MovieProjectStorage
 ## Persistent JSON should never replace the only known-good backup with corrupt data.
 ## A bad primary file is read-only until the next explicit save; its backup is retained.
 
+const MAX_PROJECT_BYTES := 64000000
+
 static func valid_source(source: String) -> bool:
+	if source.to_utf8_buffer().size() > MAX_PROJECT_BYTES:
+		return false
 	var data: Variant = JSON.parse_string(source)
 	if not (data is Dictionary):
 		return false
@@ -20,10 +24,15 @@ static func valid_source(source: String) -> bool:
 	return true
 
 static func read_valid(path: String) -> Dictionary:
+	if path.begins_with("content://"):
+		return {"ok": false}
 	if not FileAccess.file_exists(path):
 		return {"ok": false}
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
+		return {"ok": false}
+	if file.get_length() > MAX_PROJECT_BYTES:
+		file.close()
 		return {"ok": false}
 	var source := file.get_as_text()
 	file.close()
@@ -41,6 +50,8 @@ static func read_with_backup(save_path: String, backup_path: String) -> Dictiona
 	return {"ok": false, "recovered": false}
 
 static func write_safe(source: String, save_path: String, backup_path: String, temp_path: String) -> bool:
+	if save_path.begins_with("content://") or backup_path.begins_with("content://") or temp_path.begins_with("content://"):
+		return false
 	if not valid_source(source):
 		return false
 	var staging := FileAccess.open(temp_path, FileAccess.WRITE)
