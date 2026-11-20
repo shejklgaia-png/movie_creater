@@ -26,7 +26,7 @@ func _run() -> void:
     restored.transform = Transform3D(Basis(Vector3(axes[0][0], axes[0][1], axes[0][2]), Vector3(axes[1][0], axes[1][1], axes[1][2]), Vector3(axes[2][0], axes[2][1], axes[2][2])), Vector3(parsed["origin"][0], parsed["origin"][1], parsed["origin"][2]))
     var actual := restored.global_transform
     var delta := actual.origin.distance_to(expected.origin)
-    for axis in ["x", "y", "z"]:
+    for axis in range(3):
         delta = maxf(delta, actual.basis[axis].distance_to(expected.basis[axis]))
     if delta > 0.0001:
         push_error("Affine JSON round-trip mismatch: %f" % delta)
